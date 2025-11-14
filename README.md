@@ -16,6 +16,7 @@ This service receives build jobs, executes them using BuildKit, streams logs, pu
   - Workspaces are automatically cleaned up after each build.
   - Old log files are periodically deleted based on a retention policy.
 - **Retry Logic:** Automatically retries failed builds up to a configurable number of times.
+- **Automatic Dockerfile Generation:** If a repository does not contain a Dockerfile, the builder will automatically generate one based on the detected runtime. This allows projects without a Dockerfile to be built and pushed as Docker images.
 
 ## Getting Started
 
