@@ -13,6 +13,7 @@
     "yarn build",
     "go build ./...",
     "bun build",
+    "bun run build",
     "python setup.py build"
   ],
   "run": [
