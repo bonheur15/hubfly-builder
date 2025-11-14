@@ -209,8 +209,38 @@ func (s *Storage) UpdateJobStatus(id, status string) error {
 
 func (s *Storage) UpdateJobLogPath(id, logPath string) error {
 
+
+
 	_, err := s.db.Exec(`UPDATE build_jobs SET log_path = ?, updated_at = ? WHERE id = ?`, logPath, time.Now(), id)
+
+
 
 	return err
 
+
+
 }
+
+
+
+
+
+
+
+func (s *Storage) UpdateJobImageTag(id, imageTag string) error {
+
+
+
+	_, err := s.db.Exec(`UPDATE build_jobs SET image_tag = ?, updated_at = ? WHERE id = ?`, imageTag, time.Now(), id)
+
+
+
+	return err
+
+
+
+}
+
+
+
+

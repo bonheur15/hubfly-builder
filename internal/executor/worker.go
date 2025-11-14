@@ -2,6 +2,7 @@ package executor
 
 import (
 	"bufio"
+	"database/sql"
 	"fmt"
 	"io"
 	"log"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"hubfly-builder/internal/allowlist"
+	"hubfly-builder/internal/api"
 	"hubfly-builder/internal/driver"
 	"hubfly-builder/internal/logs"
 	"hubfly-builder/internal/storage"
@@ -23,26 +25,28 @@ type Worker struct {
 	logManager *logs.LogManager
 	allowlist  *allowlist.AllowedCommands
 	buildkit   *driver.BuildKit
+	apiClient  *api.Client
 	registry   string
 	logFile    *os.File
 	logWriter  io.Writer
 	workDir    string
 }
 
-func NewWorker(job *storage.BuildJob, storage *storage.Storage, logManager *logs.LogManager, allowlist *allowlist.AllowedCommands, buildkit *driver.BuildKit, registry string) *Worker {
+func NewWorker(job *storage.BuildJob, storage *storage.Storage, logManager *logs.LogManager, allowlist *allowlist.AllowedCommands, buildkit *driver.BuildKit, apiClient *api.Client, registry string) *Worker {
 	return &Worker{
 		job:        job,
 		storage:    storage,
 		logManager: logManager,
 		allowlist:  allowlist,
 		buildkit:   buildkit,
+		apiClient:  apiClient,
 		registry:   registry,
 	}
 }
 
 func (w *Worker) Run() {
 	log.Printf("Starting build for job %s", w.job.ID)
-	var err error
+	w.job.StartedAt = sql.NullTime{Time: time.Now(), Valid: true}
 
 	// Create log file
 	logPath, logFile, err := w.logManager.CreateLogFile(w.job.ID)
@@ -51,6 +55,7 @@ func (w *Worker) Run() {
 		w.failJob("failed to create log file")
 		return
 	}
+	w.job.LogPath = logPath
 	w.logFile = logFile
 	defer w.logFile.Close()
 	w.logWriter = io.MultiWriter(os.Stdout, w.logFile)
@@ -115,7 +120,7 @@ func (w *Worker) Run() {
 
 		opts := driver.BuildOpts{
 			ContextPath:    w.workDir,
-			Dockerfileath: w.workDir, // Dockerfile is at the root of the context
+			Dockerfileath: w.workDir,
 			ImageTag:       imageTag,
 		}
 		buildCmd := w.buildkit.BuildCommand(opts)
@@ -125,19 +130,16 @@ func (w *Worker) Run() {
 			return
 		}
 		w.log("BuildKit build and push successful.")
-		// TODO: Update job with image tag
+		w.job.ImageTag = imageTag
+		if err := w.storage.UpdateJobImageTag(w.job.ID, imageTag); err != nil {
+			w.log("ERROR: could not update image tag: %v", err)
+			// Don't fail the build for this, just log it
+		}
 	} else {
 		w.log("No Dockerfile found, skipping BuildKit build.")
-		// TODO: Implement other build strategies (e.g., buildpacks)
 	}
 
-	w.log("Updating status to 'success'...")
-	if err := w.storage.UpdateJobStatus(w.job.ID, "success"); err != nil {
-		w.log("ERROR: could not update status to 'success': %v", err)
-		w.failJob("internal server error")
-		return
-	}
-
+	w.succeedJob()
 	log.Printf("Finished build for job %s", w.job.ID)
 }
 
@@ -145,6 +147,19 @@ func (w *Worker) failJob(reason string) {
 	log.Printf("Failing job %s: %s", w.job.ID, reason)
 	if err := w.storage.UpdateJobStatus(w.job.ID, "failed"); err != nil {
 		log.Printf("ERROR: could not update job status to 'failed' for job %s: %v", w.job.ID, err)
+	}
+	if err := w.apiClient.ReportResult(w.job, "failed", reason); err != nil {
+		log.Printf("ERROR: could not report result to backend for job %s: %v", w.job.ID, err)
+	}
+}
+
+func (w *Worker) succeedJob() {
+	log.Printf("Succeeding job %s", w.job.ID)
+	if err := w.storage.UpdateJobStatus(w.job.ID, "success"); err != nil {
+		log.Printf("ERROR: could not update job status to 'success' for job %s: %v", w.job.ID, err)
+	}
+	if err := w.apiClient.ReportResult(w.job, "success", ""); err != nil {
+		log.Printf("ERROR: could not report result to backend for job %s: %v", w.job.ID, err)
 	}
 }
 
@@ -182,7 +197,6 @@ func (w *Worker) streamPipe(pipe io.Reader) {
 }
 
 func (w *Worker) generateImageTag() string {
-	// registry/<userid>/<projectid>:<commitSha>-b<buildId>-v<timestamp>
 	ts := time.Now().UTC().Format("20060102T150405Z")
 	shortSha := w.job.SourceInfo.CommitSha
 	if len(shortSha) > 12 {
@@ -194,6 +208,5 @@ func (w *Worker) generateImageTag() string {
 }
 
 func sanitize(s string) string {
-	// Basic sanitization for registry path components
 	return strings.ToLower(strings.ReplaceAll(s, "_", "-"))
 }

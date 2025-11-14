@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"hubfly-builder/internal/allowlist"
+	"hubfly-builder/internal/api"
 	"hubfly-builder/internal/driver"
 	"hubfly-builder/internal/executor"
 	"hubfly-builder/internal/logs"
@@ -24,6 +25,7 @@ func main() {
 	if registry == "" {
 		registry = "localhost:5000" // Example registry
 	}
+	callbackURL := os.Getenv("CALLBACK_URL") // e.g., "http://localhost:3000/api/builds/callback"
 
 	allowedCommands, err := allowlist.LoadAllowedCommands("configs/allowed-commands.json")
 	if err != nil {
@@ -41,8 +43,9 @@ func main() {
 	}
 
 	buildkit := driver.NewBuildKit(buildkitAddr)
+	apiClient := api.NewClient(callbackURL)
 
-	manager := executor.NewManager(storage, logManager, allowedCommands, buildkit, registry, maxConcurrentBuilds)
+	manager := executor.NewManager(storage, logManager, allowedCommands, buildkit, apiClient, registry, maxConcurrentBuilds)
 	go manager.Start()
 
 	server := server.NewServer(storage, logManager, manager)
