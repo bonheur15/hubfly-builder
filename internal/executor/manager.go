@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"errors"
 	"log"
 	"sync"
 	"time"
@@ -11,6 +12,8 @@ import (
 	"hubfly-builder/internal/logs"
 	"hubfly-builder/internal/storage"
 )
+
+const maxRetries = 3
 
 type Manager struct {
 	storage       *storage.Storage
@@ -39,7 +42,6 @@ func NewManager(storage *storage.Storage, logManager *logs.LogManager, allowlist
 	}
 }
 
-// SignalNewJob tells the manager to check for a new pending job.
 func (m *Manager) SignalNewJob() {
 	select {
 	case m.newJobSignal <- struct{}{}:
@@ -49,7 +51,7 @@ func (m *Manager) SignalNewJob() {
 
 func (m *Manager) Start() {
 	log.Println("Executor manager started")
-	ticker := time.NewTicker(5 * time.Second) // Poll for jobs periodically
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -72,7 +74,6 @@ func (m *Manager) tryToDispatchJob() {
 
 	job, err := m.storage.GetPendingJob()
 	if err != nil {
-		// This is expected if there are no pending jobs (sql.ErrNoRows)
 		return
 	}
 
@@ -80,17 +81,51 @@ func (m *Manager) tryToDispatchJob() {
 	m.activeBuilds[job.ID] = true
 	m.mu.Unlock()
 
-	log.Printf("Dispatching job %s", job.ID)
 	if err := m.storage.UpdateJobStatus(job.ID, "claimed"); err != nil {
 		log.Printf("ERROR: could not update job status for %s: %v", job.ID, err)
+		m.mu.Lock()
+		delete(m.activeBuilds, job.ID)
+		m.mu.Unlock()
 		return
 	}
 
 	worker := NewWorker(job, m.storage, m.logManager, m.allowlist, m.buildkit, m.apiClient, m.registry)
 	go func() {
-		worker.Run()
-		m.mu.Lock()
-		delete(m.activeBuilds, job.ID)
-		m.mu.Unlock()
+		defer func() {
+			m.mu.Lock()
+			delete(m.activeBuilds, job.ID)
+			m.mu.Unlock()
+		}()
+
+		if err := worker.Run(); err != nil {
+			log.Printf("Worker for job %s finished with error: %v", job.ID, err)
+			if errors.Is(err, ErrBuildFailed) {
+				m.handleFailedJob(job)
+			}
+		}
 	}()
+}
+
+func (m *Manager) handleFailedJob(job *storage.BuildJob) {
+	// Refetch job to get latest retry count
+	latestJob, err := m.storage.GetJob(job.ID)
+	if err != nil {
+		log.Printf("ERROR: could not get job %s for retry logic: %v", job.ID, err)
+		return
+	}
+
+	if latestJob.RetryCount < maxRetries {
+		log.Printf("Retrying job %s (attempt %d)", latestJob.ID, latestJob.RetryCount+1)
+		if err := m.storage.IncrementJobRetryCount(latestJob.ID); err != nil {
+			log.Printf("ERROR: could not increment retry count for job %s: %v", latestJob.ID, err)
+			return
+		}
+		if err := m.storage.UpdateJobStatus(latestJob.ID, "pending"); err != nil {
+			log.Printf("ERROR: could not reset job status to pending for retry: %v", err)
+		}
+		m.SignalNewJob() // Signal to pick it up again
+	} else {
+		log.Printf("Job %s has reached max retries (%d)", latestJob.ID, maxRetries)
+		// The job status is already set to 'failed' by the worker.
+	}
 }

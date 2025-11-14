@@ -231,7 +231,15 @@ func (s *Storage) UpdateJobImageTag(id, imageTag string) error {
 
 
 
+
+
+
+
 	_, err := s.db.Exec(`UPDATE build_jobs SET image_tag = ?, updated_at = ? WHERE id = ?`, imageTag, time.Now(), id)
+
+
+
+
 
 
 
@@ -239,7 +247,59 @@ func (s *Storage) UpdateJobImageTag(id, imageTag string) error {
 
 
 
+
+
+
+
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+func (s *Storage) IncrementJobRetryCount(id string) error {
+
+
+
+
+
+
+
+	_, err := s.db.Exec(`UPDATE build_jobs SET retry_count = retry_count + 1, updated_at = ? WHERE id = ?`, time.Now(), id)
+
+
+
+
+
+
+
+	return err
+
+
+
+
+
+
+
+}
+
+
+
+
+
+
+
+
 
 
 

@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"os"
+	"time"
 
 	"hubfly-builder/internal/allowlist"
 	"hubfly-builder/internal/api"
@@ -14,6 +15,7 @@ import (
 )
 
 const maxConcurrentBuilds = 3
+const logRetentionDays = 7
 
 func main() {
 	// In a real app, get these from config/flags
@@ -41,6 +43,18 @@ func main() {
 	if err != nil {
 		log.Fatalf("could not create log manager: %s\n", err)
 	}
+
+	// Start log cleanup routine
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for {
+			<-	icker.C
+			if err := logManager.Cleanup(logRetentionDays * 24 * time.Hour); err != nil {
+				log.Printf("ERROR: log cleanup failed: %v", err)
+			}
+		}
+	}()
 
 	buildkit := driver.NewBuildKit(buildkitAddr)
 	apiClient := api.NewClient(callbackURL)

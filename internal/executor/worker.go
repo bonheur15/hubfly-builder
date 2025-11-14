@@ -3,6 +3,7 @@ package executor
 import (
 	"bufio"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -18,6 +19,8 @@ import (
 	"hubfly-builder/internal/logs"
 	"hubfly-builder/internal/storage"
 )
+
+var ErrBuildFailed = errors.New("build failed")
 
 type Worker struct {
 	job        *storage.BuildJob
@@ -44,16 +47,14 @@ func NewWorker(job *storage.BuildJob, storage *storage.Storage, logManager *logs
 	}
 }
 
-func (w *Worker) Run() {
+func (w *Worker) Run() error {
 	log.Printf("Starting build for job %s", w.job.ID)
 	w.job.StartedAt = sql.NullTime{Time: time.Now(), Valid: true}
 
-	// Create log file
 	logPath, logFile, err := w.logManager.CreateLogFile(w.job.ID)
 	if err != nil {
 		log.Printf("ERROR: could not create log file for job %s: %v", w.job.ID, err)
-		w.failJob("failed to create log file")
-		return
+		return w.failJob("failed to create log file")
 	}
 	w.job.LogPath = logPath
 	w.logFile = logFile
@@ -62,56 +63,43 @@ func (w *Worker) Run() {
 
 	if err := w.storage.UpdateJobLogPath(w.job.ID, logPath); err != nil {
 		w.log("ERROR: could not update log path: %v", err)
-		w.failJob("internal server error")
-		return
+		return w.failJob("internal server error")
 	}
 
 	if err := w.storage.UpdateJobStatus(w.job.ID, "building"); err != nil {
 		w.log("ERROR: could not update status to 'building': %v", err)
-		w.failJob("internal server error")
-		return
+		return w.failJob("internal server error")
 	}
 
-	// Create workspace
 	w.workDir, err = os.MkdirTemp("", fmt.Sprintf("hubfly-builder-ws-%s-", w.job.ID))
 	if err != nil {
 		w.log("ERROR: could not create workspace: %v", err)
-		w.failJob("internal server error")
-		return
+		return w.failJob("internal server error")
 	}
 	defer os.RemoveAll(w.workDir)
 	w.log("Created workspace: %s", w.workDir)
 
-	// --- Clone repository ---
-	w.log("Cloning repository from %s...", w.job.SourceInfo.GitRepository)
 	cloneCmd := exec.Command("git", "clone", w.job.SourceInfo.GitRepository, w.workDir)
 	if err := w.executeCommand(cloneCmd); err != nil {
 		w.log("ERROR: failed to clone repository: %v", err)
-		w.failJob("failed to clone repository")
-		return
+		return w.failJob("failed to clone repository")
 	}
 	w.log("Repository cloned successfully.")
 
-	// --- Pre-build command ---
 	if w.job.BuildConfig.PrebuildCommand != "" {
-		w.log("Pre-build command specified: %s", w.job.BuildConfig.PrebuildCommand)
 		if !allowlist.IsCommandAllowed(w.job.BuildConfig.PrebuildCommand, w.allowlist.Prebuild) {
 			w.log("ERROR: pre-build command is not allowed: %s", w.job.BuildConfig.PrebuildCommand)
-			w.failJob("pre-build command not allowed")
-			return
+			return w.failJob("pre-build command not allowed")
 		}
-
 		preBuildCmd := exec.Command("sh", "-c", w.job.BuildConfig.PrebuildCommand)
 		preBuildCmd.Dir = w.workDir
 		if err := w.executeCommand(preBuildCmd); err != nil {
 			w.log("ERROR: pre-build command failed: %v", err)
-			w.failJob("pre-build command failed")
-			return
+			return w.failJob("pre-build command failed")
 		}
 		w.log("Pre-build command finished successfully.")
 	}
 
-	// --- Build with BuildKit ---
 	dockerfilePath := filepath.Join(w.workDir, "Dockerfile")
 	if _, err := os.Stat(dockerfilePath); err == nil {
 		w.log("Dockerfile found, starting BuildKit build...")
@@ -126,24 +114,21 @@ func (w *Worker) Run() {
 		buildCmd := w.buildkit.BuildCommand(opts)
 		if err := w.executeCommand(buildCmd); err != nil {
 			w.log("ERROR: BuildKit build failed: %v", err)
-			w.failJob("BuildKit build failed")
-			return
+			return w.failJob("BuildKit build failed")
 		}
 		w.log("BuildKit build and push successful.")
 		w.job.ImageTag = imageTag
 		if err := w.storage.UpdateJobImageTag(w.job.ID, imageTag); err != nil {
 			w.log("ERROR: could not update image tag: %v", err)
-			// Don't fail the build for this, just log it
 		}
 	} else {
 		w.log("No Dockerfile found, skipping BuildKit build.")
 	}
 
-	w.succeedJob()
-	log.Printf("Finished build for job %s", w.job.ID)
+	return w.succeedJob()
 }
 
-func (w *Worker) failJob(reason string) {
+func (w *Worker) failJob(reason string) error {
 	log.Printf("Failing job %s: %s", w.job.ID, reason)
 	if err := w.storage.UpdateJobStatus(w.job.ID, "failed"); err != nil {
 		log.Printf("ERROR: could not update job status to 'failed' for job %s: %v", w.job.ID, err)
@@ -151,16 +136,20 @@ func (w *Worker) failJob(reason string) {
 	if err := w.apiClient.ReportResult(w.job, "failed", reason); err != nil {
 		log.Printf("ERROR: could not report result to backend for job %s: %v", w.job.ID, err)
 	}
+	return fmt.Errorf("%w: %s", ErrBuildFailed, reason)
 }
 
-func (w *Worker) succeedJob() {
+func (w *Worker) succeedJob() error {
 	log.Printf("Succeeding job %s", w.job.ID)
 	if err := w.storage.UpdateJobStatus(w.job.ID, "success"); err != nil {
-		log.Printf("ERROR: could not update job status to 'success' for job %s: %v", w.job.ID, err)
+		log.Printf("ERROR: could not update status to 'success' for job %s: %v", w.job.ID, err)
+		return err
 	}
 	if err := w.apiClient.ReportResult(w.job, "success", ""); err != nil {
 		log.Printf("ERROR: could not report result to backend for job %s: %v", w.job.ID, err)
+		return err
 	}
+	return nil
 }
 
 func (w *Worker) log(format string, args ...interface{}) {
