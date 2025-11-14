@@ -18,6 +18,12 @@ This service receives build jobs, executes them using BuildKit, streams logs, pu
 - **Retry Logic:** Automatically retries failed builds up to a configurable number of times.
 - **Automatic Dockerfile Generation:** If a repository does not contain a Dockerfile, the builder will automatically generate one based on the detected runtime. This allows projects without a Dockerfile to be built and pushed as Docker images.
 
+### Supported Runtimes
+- Node.js
+- Python
+- Go
+- Bun
+
 ## Getting Started
 
 ### Prerequisites
@@ -72,7 +78,7 @@ All endpoints are served on port `:8080`.
     "userId": "user_123",
     "sourceType": "git",
     "sourceInfo": {
-      "gitRepository": "https://github.com/bonheur15/hubfly-sample-react-bun.git",
+      "gitRepository": "https://github.com/your-username/your-bun-project.git",
       "commitSha": "abcdef",
       "ref": "main"
     },
