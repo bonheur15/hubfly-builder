@@ -19,7 +19,30 @@ Standalone Go Builder for Hubfly.
 - **Description:** Creates a new build job.
 - **Example:**
   ```bash
-  curl -X POST http://localhost:8080/api/v1/jobs -d '{ "id": "build_123", "projectId": "proj_1", "userId": "user_1", "sourceType": "git", "sourceInfo": "{\"gitRepository\": \"https://github.com/bonheur15/hubfly-sample-react-bun.git\", \"commitSha\": \"abcdef\", \"ref\": \"main\"}", "buildConfig": "{\"isAutoBuild\": true, \"runtime\": \"node\", \"version\": \"18\", \"prebuildCommand\": \"\", \"buildCommand\": \"\", \"runCommand\": \"npm start\", \"timeoutSeconds\": 1800, \"resourceLimits\": {\"cpu\": 1, \"memoryMB\": 1024}}" }'
+  curl -X POST http://localhost:8080/api/v1/jobs -H "Content-Type: application/json" -d '{
+    "id": "build_1231q2",
+    "projectId": "proj_1",
+    "userId": "user_1",
+    "sourceType": "git",
+    "sourceInfo": {
+      "gitRepository": "https://github.com/bonheur15/hubfly-sample-react-bun.git",
+      "commitSha": "abcdef",
+      "ref": "main"
+    },
+    "buildConfig": {
+      "isAutoBuild": true,
+      "runtime": "node",
+      "version": "18",
+      "prebuildCommand": "",
+      "buildCommand": "",
+      "runCommand": "npm start",
+      "timeoutSeconds": 1800,
+      "resourceLimits": {
+        "cpu": 1,
+        "memoryMB": 1024
+      }
+    }
+  }'
   ```
 
 ### Get job status
