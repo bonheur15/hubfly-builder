@@ -15,6 +15,7 @@ import (
 
 	"hubfly-builder/internal/allowlist"
 	"hubfly-builder/internal/api"
+	"hubfly-builder/internal/autodetect"
 	"hubfly-builder/internal/driver"
 	"hubfly-builder/internal/logs"
 	"hubfly-builder/internal/storage"
@@ -123,8 +124,48 @@ func (w *Worker) Run() error {
 			// Don't fail the build for this, just log it
 		}
 	} else {
-		w.log("ERROR: No Dockerfile found, and no other build strategy is implemented.")
-		return w.failJob("No build strategy found (e.g., Dockerfile missing)")
+		w.log("No Dockerfile found, attempting to generate one...")
+		if !w.job.BuildConfig.IsAutoBuild {
+			w.log("ERROR: Auto-build is not enabled for this job.")
+			return w.failJob("No build strategy found (e.g., Dockerfile missing and auto-build disabled)")
+		}
+
+		dockerfileContent, err := autodetect.GenerateDockerfile(
+			w.job.BuildConfig.Runtime,
+			w.job.BuildConfig.Version,
+			w.job.BuildConfig.PrebuildCommand,
+			w.job.BuildConfig.BuildCommand,
+			w.job.BuildConfig.RunCommand,
+		)
+		if err != nil {
+			w.log("ERROR: failed to generate Dockerfile: %v", err)
+			return w.failJob("failed to generate Dockerfile")
+		}
+
+		if err := os.WriteFile(dockerfilePath, dockerfileContent, 0644); err != nil {
+			w.log("ERROR: failed to write generated Dockerfile: %v", err)
+			return w.failJob("failed to write generated Dockerfile")
+		}
+
+		w.log("Dockerfile generated successfully, starting BuildKit build...")
+		imageTag := w.generateImageTag()
+		w.log("Image tag: %s", imageTag)
+
+		opts := driver.BuildOpts{
+			ContextPath:    w.workDir,
+			Dockerfileath: w.workDir,
+			ImageTag:       imageTag,
+		}
+		buildCmd := w.buildkit.BuildCommand(opts)
+		if err := w.executeCommand(buildCmd); err != nil {
+			w.log("ERROR: BuildKit build failed: %v", err)
+			return w.failJob("BuildKit build failed")
+		}
+		w.log("BuildKit build and push successful.")
+		w.job.ImageTag = imageTag
+		if err := w.storage.UpdateJobImageTag(w.job.ID, imageTag); err != nil {
+			w.log("ERROR: could not update image tag: %v", err)
+		}
 	}
 
 	return w.succeedJob()
