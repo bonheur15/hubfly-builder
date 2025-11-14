@@ -30,3 +30,7 @@ func (m *LogManager) CreateLogFile(jobID string) (string, *os.File, error) {
 
 	return logPath, f, nil
 }
+
+func (m *LogManager) GetLog(logPath string) ([]byte, error) {
+	return os.ReadFile(logPath)
+}

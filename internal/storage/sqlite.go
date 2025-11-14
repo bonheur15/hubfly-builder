@@ -142,15 +142,75 @@ func (s *Storage) CreateJob(job *BuildJob) error {
 }
 
 func (s *Storage) GetJob(id string) (*BuildJob, error) {
+
 	job := &BuildJob{}
+
 	err := s.db.QueryRow(`
+
 		SELECT id, project_id, user_id, source_type, source_info, build_config, status, image_tag, started_at, finished_at, exit_code, retry_count, log_path, last_checkpoint, created_at, updated_at
+
 		FROM build_jobs WHERE id = ?
+
 	`, id).Scan(&job.ID, &job.ProjectID, &job.UserID, &job.SourceType, &job.SourceInfo, &job.BuildConfig, &job.Status, &job.ImageTag, &job.StartedAt, &job.FinishedAt, &job.ExitCode, &job.RetryCount, &job.LogPath, &job.LastCheckpoint, &job.CreatedAt, &job.UpdatedAt)
 
+
+
 	if err != nil {
+
 		return nil, err
+
 	}
 
+
+
 	return job, nil
+
+}
+
+
+
+func (s *Storage) GetPendingJob() (*BuildJob, error) {
+
+	job := &BuildJob{}
+
+	err := s.db.QueryRow(`
+
+		SELECT id, project_id, user_id, source_type, source_info, build_config, status, image_tag, started_at, finished_at, exit_code, retry_count, log_path, last_checkpoint, created_at, updated_at
+
+		FROM build_jobs WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1
+
+	`).Scan(&job.ID, &job.ProjectID, &job.UserID, &job.SourceType, &job.SourceInfo, &job.BuildConfig, &job.Status, &job.ImageTag, &job.StartedAt, &job.FinishedAt, &job.ExitCode, &job.RetryCount, &job.LogPath, &job.LastCheckpoint, &job.CreatedAt, &job.UpdatedAt)
+
+
+
+	if err != nil {
+
+		return nil, err
+
+	}
+
+
+
+	return job, nil
+
+}
+
+
+
+func (s *Storage) UpdateJobStatus(id, status string) error {
+
+	_, err := s.db.Exec(`UPDATE build_jobs SET status = ?, updated_at = ? WHERE id = ?`, status, time.Now(), id)
+
+	return err
+
+}
+
+
+
+func (s *Storage) UpdateJobLogPath(id, logPath string) error {
+
+	_, err := s.db.Exec(`UPDATE build_jobs SET log_path = ?, updated_at = ? WHERE id = ?`, logPath, time.Now(), id)
+
+	return err
+
 }
