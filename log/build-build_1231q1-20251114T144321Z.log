@@ -1,0 +1,5 @@
+[2025-11-14T14:43:21Z] Created workspace: /tmp/hubfly-builder-ws-build_1231q1-1840327987
+[2025-11-14T14:43:21Z] Executing: /usr/bin/git clone https://github.com/bonheur15/hubfly-sample-react-bun.git /tmp/hubfly-builder-ws-build_1231q1-1840327987
+[2025-11-14T14:43:21Z] Cloning into '/tmp/hubfly-builder-ws-build_1231q1-1840327987'...
+[2025-11-14T14:43:23Z] Repository cloned successfully.
+[2025-11-14T14:43:23Z] No Dockerfile found, skipping BuildKit build.

@@ -43,7 +43,6 @@ func main() {
 		log.Fatalf("could not reset in-progress jobs: %s\n", err)
 	}
 
-
 	logManager, err := logs.NewLogManager("./log")
 	if err != nil {
 		log.Fatalf("could not create log manager: %s\n", err)
@@ -54,7 +53,7 @@ func main() {
 		ticker := time.NewTicker(1 * time.Hour)
 		defer ticker.Stop()
 		for {
-			<-	icker.C
+			<-ticker.C
 			if err := logManager.Cleanup(logRetentionDays * 24 * time.Hour); err != nil {
 				log.Printf("ERROR: log cleanup failed: %v", err)
 			}
