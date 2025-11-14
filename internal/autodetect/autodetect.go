@@ -18,8 +18,8 @@ type BuildConfig struct {
 }
 
 func DetectRuntime(repoPath string) (string, string) {
-	if fileExists(filepath.Join(repoPath, "bun.lockb")) {
-		return "bun", "1.0" // Simplified version detection
+	if fileExists(filepath.Join(repoPath, "bun.lock")) { //new version of bun is bun.lock
+		return "bun", "1.2" // Simplified version detection
 	}
 	if fileExists(filepath.Join(repoPath, "package.json")) {
 		return "node", "18" // Simplified version detection
