@@ -70,3 +70,29 @@ type BuildJob struct {
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }
+
+func (s *Storage) CreateJob(job *BuildJob) error {
+	job.CreatedAt = time.Now()
+	job.UpdatedAt = time.Now()
+
+	_, err := s.db.Exec(`
+		INSERT INTO build_jobs (id, project_id, user_id, source_type, source_info, build_config, status, image_tag, started_at, finished_at, exit_code, retry_count, log_path, last_checkpoint, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, job.ID, job.ProjectID, job.UserID, job.SourceType, job.SourceInfo, job.BuildConfig, job.Status, job.ImageTag, job.StartedAt, job.FinishedAt, job.ExitCode, job.RetryCount, job.LogPath, job.LastCheckpoint, job.CreatedAt, job.UpdatedAt)
+
+	return err
+}
+
+func (s *Storage) GetJob(id string) (*BuildJob, error) {
+	job := &BuildJob{}
+	err := s.db.QueryRow(`
+		SELECT id, project_id, user_id, source_type, source_info, build_config, status, image_tag, started_at, finished_at, exit_code, retry_count, log_path, last_checkpoint, created_at, updated_at
+		FROM build_jobs WHERE id = ?
+	`, id).Scan(&job.ID, &job.ProjectID, &job.UserID, &job.SourceType, &job.SourceInfo, &job.BuildConfig, &job.Status, &job.ImageTag, &job.StartedAt, &job.FinishedAt, &job.ExitCode, &job.RetryCount, &job.LogPath, &job.LastCheckpoint, &job.CreatedAt, &job.UpdatedAt)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return job, nil
+}

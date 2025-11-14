@@ -33,19 +33,27 @@ func (s *Server) CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Save job to storage
+	if err := s.storage.CreateJob(&job); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(job)
 }
 
 func (s *Server) GetJobHandler(w http.ResponseWriter, r *http.Request) {
-	// vars := mux.Vars(r)
-	// id := vars["id"]
+	vars := mux.Vars(r)
+	id := vars["id"]
 
-	// TODO: Get job from storage
+	job, err := s.storage.GetJob(id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(job)
 }
 
 func HealthCheckHandler(w http.ResponseWriter, r *http.Request) {
