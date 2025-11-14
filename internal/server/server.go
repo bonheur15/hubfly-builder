@@ -3,8 +3,8 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
-	"time"
 
 	"github.com/gorilla/mux"
 	"hubfly-builder/internal/executor"
@@ -98,19 +98,20 @@ func (s *Server) GetJobLogsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(logs)
 }
 
-type RunningBuild struct {
-	ID        string    `json:"id"`
-	ProjectID string    `json:"projectId"`
-	UserID    string    `json:"userId"`
-	Status    string    `json:"status"`
-	StartedAt time.Time `json:"startedAt"`
-	LogPath   string    `json:"logPath"`
-}
-
 func (s *Server) GetRunningBuildsHandler(w http.ResponseWriter, r *http.Request) {
-	// For now, returns an empty list as per M1.
-	// Later, this will query the executor manager.
-	runningBuilds := []RunningBuild{}
+	activeIDs := s.manager.GetActiveBuilds()
+	runningBuilds := []storage.BuildJob{}
+
+	for _, id := range activeIDs {
+		job, err := s.storage.GetJob(id)
+		if err != nil {
+			// Log the error but don't fail the whole request
+			log.Printf("WARN: could not get job details for active job %s: %v", id, err)
+			continue
+		}
+		runningBuilds = append(runningBuilds, *job)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(runningBuilds)

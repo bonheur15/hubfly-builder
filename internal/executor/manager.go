@@ -107,25 +107,67 @@ func (m *Manager) tryToDispatchJob() {
 }
 
 func (m *Manager) handleFailedJob(job *storage.BuildJob) {
+
 	// Refetch job to get latest retry count
+
 	latestJob, err := m.storage.GetJob(job.ID)
+
 	if err != nil {
+
 		log.Printf("ERROR: could not get job %s for retry logic: %v", job.ID, err)
+
 		return
+
 	}
 
+
+
 	if latestJob.RetryCount < maxRetries {
+
 		log.Printf("Retrying job %s (attempt %d)", latestJob.ID, latestJob.RetryCount+1)
+
 		if err := m.storage.IncrementJobRetryCount(latestJob.ID); err != nil {
+
 			log.Printf("ERROR: could not increment retry count for job %s: %v", latestJob.ID, err)
+
 			return
+
 		}
+
 		if err := m.storage.UpdateJobStatus(latestJob.ID, "pending"); err != nil {
+
 			log.Printf("ERROR: could not reset job status to pending for retry: %v", err)
+
 		}
+
 		m.SignalNewJob() // Signal to pick it up again
+
 	} else {
+
 		log.Printf("Job %s has reached max retries (%d)", latestJob.ID, maxRetries)
+
 		// The job status is already set to 'failed' by the worker.
+
 	}
+
+}
+
+
+
+func (m *Manager) GetActiveBuilds() []string {
+
+	m.mu.Lock()
+
+	defer m.mu.Unlock()
+
+	var ids []string
+
+	for id := range m.activeBuilds {
+
+		ids = append(ids, id)
+
+	}
+
+	return ids
+
 }

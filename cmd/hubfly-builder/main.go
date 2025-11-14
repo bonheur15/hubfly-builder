@@ -39,6 +39,11 @@ func main() {
 		log.Fatalf("could not create storage: %s\n", err)
 	}
 
+	if err := storage.ResetInProgressJobs(); err != nil {
+		log.Fatalf("could not reset in-progress jobs: %s\n", err)
+	}
+
+
 	logManager, err := logs.NewLogManager("./log")
 	if err != nil {
 		log.Fatalf("could not create log manager: %s\n", err)
