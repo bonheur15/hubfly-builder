@@ -1,24 +1,39 @@
 package driver
 
 import (
-	"context"
-	"io"
-
-	"github.com/moby/buildkit/client"
+	"fmt"
+	"os/exec"
 )
 
 type BuildKit struct {
-	client *client.Client
+	// buildkitd address, e.g., "unix:///run/buildkit/buildkitd.sock"
+	// This can be configured via startup flags.
+	Addr string
 }
 
-func NewBuildKit(host string) (*BuildKit, error) {
-	c, err := client.New(context.Background(), host)
-	if err != nil {
-		return nil, err
+func NewBuildKit(addr string) *BuildKit {
+	if addr == "" {
+		// Provide a default, but it's better to configure this.
+		addr = "unix:///run/buildkit/buildkitd.sock"
 	}
-	return &BuildKit{client: c}, nil
+	return &BuildKit{Addr: addr}
 }
 
-func (bk *BuildKit) Build(ctx context.Context, w io.Writer, opts client.SolveOpt) (*client.SolveResponse, error) {
-	return bk.client.Solve(ctx, nil, opts, nil)
+type BuildOpts struct {
+	ContextPath    string
+	Dockerfileath string
+	ImageTag       string
+}
+
+func (bk *BuildKit) BuildCommand(opts BuildOpts) *exec.Cmd {
+	// Example: buildctl build --frontend dockerfile.v0 --local context=. --local dockerfile=. --output type=image,name=my-image,push=true
+	args := []string{
+		"build",
+		"--addr", bk.Addr,
+		"--frontend", "dockerfile.v0",
+		"--local", fmt.Sprintf("context=%s", opts.ContextPath),
+		"--local", fmt.Sprintf("dockerfile=%s", opts.Dockerfileath),
+		"--output", fmt.Sprintf("type=image,name=%s,push=true", opts.ImageTag),
+	}
+	return exec.Command("buildctl", args...)
 }

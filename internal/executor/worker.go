@@ -8,9 +8,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"hubfly-builder/internal/allowlist"
+	"hubfly-builder/internal/driver"
 	"hubfly-builder/internal/logs"
 	"hubfly-builder/internal/storage"
 )
@@ -20,17 +22,21 @@ type Worker struct {
 	storage    *storage.Storage
 	logManager *logs.LogManager
 	allowlist  *allowlist.AllowedCommands
+	buildkit   *driver.BuildKit
+	registry   string
 	logFile    *os.File
 	logWriter  io.Writer
 	workDir    string
 }
 
-func NewWorker(job *storage.BuildJob, storage *storage.Storage, logManager *logs.LogManager, allowlist *allowlist.AllowedCommands) *Worker {
+func NewWorker(job *storage.BuildJob, storage *storage.Storage, logManager *logs.LogManager, allowlist *allowlist.AllowedCommands, buildkit *driver.BuildKit, registry string) *Worker {
 	return &Worker{
 		job:        job,
 		storage:    storage,
 		logManager: logManager,
 		allowlist:  allowlist,
+		buildkit:   buildkit,
+		registry:   registry,
 	}
 }
 
@@ -100,8 +106,30 @@ func (w *Worker) Run() {
 		w.log("Pre-build command finished successfully.")
 	}
 
-	// TODO: M4 - Auto-detect and run build command
-	w.log("Build process simulation finished.")
+	// --- Build with BuildKit ---
+	dockerfilePath := filepath.Join(w.workDir, "Dockerfile")
+	if _, err := os.Stat(dockerfilePath); err == nil {
+		w.log("Dockerfile found, starting BuildKit build...")
+		imageTag := w.generateImageTag()
+		w.log("Image tag: %s", imageTag)
+
+		opts := driver.BuildOpts{
+			ContextPath:    w.workDir,
+			Dockerfileath: w.workDir, // Dockerfile is at the root of the context
+			ImageTag:       imageTag,
+		}
+		buildCmd := w.buildkit.BuildCommand(opts)
+		if err := w.executeCommand(buildCmd); err != nil {
+			w.log("ERROR: BuildKit build failed: %v", err)
+			w.failJob("BuildKit build failed")
+			return
+		}
+		w.log("BuildKit build and push successful.")
+		// TODO: Update job with image tag
+	} else {
+		w.log("No Dockerfile found, skipping BuildKit build.")
+		// TODO: Implement other build strategies (e.g., buildpacks)
+	}
 
 	w.log("Updating status to 'success'...")
 	if err := w.storage.UpdateJobStatus(w.job.ID, "success"); err != nil {
@@ -126,14 +154,12 @@ func (w *Worker) log(format string, args ...interface{}) {
 }
 
 func (w *Worker) executeCommand(cmd *exec.Cmd) error {
-	// Stream stdout
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
 	}
 	go w.streamPipe(stdout)
 
-	// Stream stderr
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return err
@@ -153,4 +179,21 @@ func (w *Worker) streamPipe(pipe io.Reader) {
 	for scanner.Scan() {
 		w.log(scanner.Text())
 	}
+}
+
+func (w *Worker) generateImageTag() string {
+	// registry/<userid>/<projectid>:<commitSha>-b<buildId>-v<timestamp>
+	ts := time.Now().UTC().Format("20060102T150405Z")
+	shortSha := w.job.SourceInfo.CommitSha
+	if len(shortSha) > 12 {
+		shortSha = shortSha[:12]
+	}
+	sanitizedUserID := sanitize(w.job.UserID)
+	sanitizedProjectID := sanitize(w.job.ProjectID)
+	return fmt.Sprintf("%s/%s/%s:%s-b%s-v%s", w.registry, sanitizedUserID, sanitizedProjectID, shortSha, w.job.ID, ts)
+}
+
+func sanitize(s string) string {
+	// Basic sanitization for registry path components
+	return strings.ToLower(strings.ReplaceAll(s, "_", "-"))
 }
