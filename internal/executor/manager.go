@@ -13,7 +13,7 @@ import (
 	"hubfly-builder/internal/storage"
 )
 
-const maxRetries = 3
+const maxRetries = 0
 
 type Manager struct {
 	storage       *storage.Storage
@@ -120,8 +120,6 @@ func (m *Manager) handleFailedJob(job *storage.BuildJob) {
 
 	}
 
-
-
 	if latestJob.RetryCount < maxRetries {
 
 		log.Printf("Retrying job %s (attempt %d)", latestJob.ID, latestJob.RetryCount+1)
@@ -151,8 +149,6 @@ func (m *Manager) handleFailedJob(job *storage.BuildJob) {
 	}
 
 }
-
-
 
 func (m *Manager) GetActiveBuilds() []string {
 
