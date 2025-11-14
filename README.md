@@ -33,6 +33,7 @@ This service receives build jobs, executes them using BuildKit, streams logs, pu
     # Example using Docker
     docker run -d --name buildkitd --privileged moby/buildkit:latest
     export BUILDKIT_ADDR=docker-container://buildkitd
+    export BUILDKIT_HOST=docker-container://buildkitd
     ```
 
 2.  **Run the builder service:**
@@ -66,7 +67,7 @@ All endpoints are served on port `:8080`.
 - **Example:**
   ```bash
   curl -X POST http://localhost:8080/api/v1/jobs -H "Content-Type: application/json" -d '{
-    "id": "build_2",
+    "id": "build_5",
     "projectId": "my-project",
     "userId": "user_123",
     "sourceType": "git",

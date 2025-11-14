@@ -26,10 +26,10 @@ type BuildOpts struct {
 }
 
 func (bk *BuildKit) BuildCommand(opts BuildOpts) *exec.Cmd {
-	// Example: buildctl build --frontend dockerfile.v0 --local context=. --local dockerfile=. --output type=image,name=my-image,push=true
+	// Example: buildctl --addr <addr> build --frontend dockerfile.v0 --local context=. --local dockerfile=. --output type=image,name=my-image,push=true
 	args := []string{
-		"build",
 		"--addr", bk.Addr,
+		"build",
 		"--frontend", "dockerfile.v0",
 		"--local", fmt.Sprintf("context=%s", opts.ContextPath),
 		"--local", fmt.Sprintf("dockerfile=%s", opts.Dockerfileath),
