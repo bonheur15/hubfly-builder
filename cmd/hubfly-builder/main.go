@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 
+	"hubfly-builder/internal/allowlist"
 	"hubfly-builder/internal/executor"
 	"hubfly-builder/internal/logs"
 	"hubfly-builder/internal/server"
@@ -12,6 +13,11 @@ import (
 const maxConcurrentBuilds = 3
 
 func main() {
+	allowedCommands, err := allowlist.LoadAllowedCommands("configs/allowed-commands.json")
+	if err != nil {
+		log.Fatalf("could not load allowed commands: %s\n", err)
+	}
+
 	storage, err := storage.NewStorage("./hubfly-builder.sqlite")
 	if err != nil {
 		log.Fatalf("could not create storage: %s\n", err)
@@ -22,7 +28,7 @@ func main() {
 		log.Fatalf("could not create log manager: %s\n", err)
 	}
 
-	manager := executor.NewManager(storage, logManager, maxConcurrentBuilds)
+	manager := executor.NewManager(storage, logManager, allowedCommands, maxConcurrentBuilds)
 	go manager.Start()
 
 	server := server.NewServer(storage, logManager, manager)

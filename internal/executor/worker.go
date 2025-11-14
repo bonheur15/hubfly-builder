@@ -1,12 +1,16 @@
 package executor
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"time"
 
+	"hubfly-builder/internal/allowlist"
 	"hubfly-builder/internal/logs"
 	"hubfly-builder/internal/storage"
 )
@@ -15,15 +19,18 @@ type Worker struct {
 	job        *storage.BuildJob
 	storage    *storage.Storage
 	logManager *logs.LogManager
+	allowlist  *allowlist.AllowedCommands
 	logFile    *os.File
 	logWriter  io.Writer
+	workDir    string
 }
 
-func NewWorker(job *storage.BuildJob, storage *storage.Storage, logManager *logs.LogManager) *Worker {
+func NewWorker(job *storage.BuildJob, storage *storage.Storage, logManager *logs.LogManager, allowlist *allowlist.AllowedCommands) *Worker {
 	return &Worker{
 		job:        job,
 		storage:    storage,
 		logManager: logManager,
+		allowlist:  allowlist,
 	}
 }
 
@@ -40,36 +47,61 @@ func (w *Worker) Run() {
 	}
 	w.logFile = logFile
 	defer w.logFile.Close()
-
-	// Use a multi-writer to log to both stdout and the file
 	w.logWriter = io.MultiWriter(os.Stdout, w.logFile)
 
-	w.log("Updating log path...")
 	if err := w.storage.UpdateJobLogPath(w.job.ID, logPath); err != nil {
 		w.log("ERROR: could not update log path: %v", err)
 		w.failJob("internal server error")
 		return
 	}
 
-	w.log("Updating status to 'building'...")
 	if err := w.storage.UpdateJobStatus(w.job.ID, "building"); err != nil {
 		w.log("ERROR: could not update status to 'building': %v", err)
 		w.failJob("internal server error")
 		return
 	}
 
-	// Simulate build process
-	w.log("Simulating build process...")
-	time.Sleep(5 * time.Second)
-	w.log("Cloning repository from %s", w.job.SourceInfo.GitRepository)
-	time.Sleep(5 * time.Second)
-	w.log("Auto-detecting build commands...")
-	time.Sleep(2 * time.Second)
-	w.log("Running pre-build commands...")
-	time.Sleep(5 * time.Second)
-	w.log("Running build commands...")
-	time.Sleep(10 * time.Second)
-	w.log("Build successful!")
+	// Create workspace
+	w.workDir, err = os.MkdirTemp("", fmt.Sprintf("hubfly-builder-ws-%s-", w.job.ID))
+	if err != nil {
+		w.log("ERROR: could not create workspace: %v", err)
+		w.failJob("internal server error")
+		return
+	}
+	defer os.RemoveAll(w.workDir)
+	w.log("Created workspace: %s", w.workDir)
+
+	// --- Clone repository ---
+	w.log("Cloning repository from %s...", w.job.SourceInfo.GitRepository)
+	cloneCmd := exec.Command("git", "clone", w.job.SourceInfo.GitRepository, w.workDir)
+	if err := w.executeCommand(cloneCmd); err != nil {
+		w.log("ERROR: failed to clone repository: %v", err)
+		w.failJob("failed to clone repository")
+		return
+	}
+	w.log("Repository cloned successfully.")
+
+	// --- Pre-build command ---
+	if w.job.BuildConfig.PrebuildCommand != "" {
+		w.log("Pre-build command specified: %s", w.job.BuildConfig.PrebuildCommand)
+		if !allowlist.IsCommandAllowed(w.job.BuildConfig.PrebuildCommand, w.allowlist.Prebuild) {
+			w.log("ERROR: pre-build command is not allowed: %s", w.job.BuildConfig.PrebuildCommand)
+			w.failJob("pre-build command not allowed")
+			return
+		}
+
+		preBuildCmd := exec.Command("sh", "-c", w.job.BuildConfig.PrebuildCommand)
+		preBuildCmd.Dir = w.workDir
+		if err := w.executeCommand(preBuildCmd); err != nil {
+			w.log("ERROR: pre-build command failed: %v", err)
+			w.failJob("pre-build command failed")
+			return
+		}
+		w.log("Pre-build command finished successfully.")
+	}
+
+	// TODO: M4 - Auto-detect and run build command
+	w.log("Build process simulation finished.")
 
 	w.log("Updating status to 'success'...")
 	if err := w.storage.UpdateJobStatus(w.job.ID, "success"); err != nil {
@@ -90,6 +122,35 @@ func (w *Worker) failJob(reason string) {
 
 func (w *Worker) log(format string, args ...interface{}) {
 	logLine := fmt.Sprintf(format, args...)
-	// In a real implementation, this would be a structured log (JSONL)
 	fmt.Fprintf(w.logWriter, "[%s] %s\n", time.Now().UTC().Format(time.RFC3339), logLine)
+}
+
+func (w *Worker) executeCommand(cmd *exec.Cmd) error {
+	// Stream stdout
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	go w.streamPipe(stdout)
+
+	// Stream stderr
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return err
+	}
+	go w.streamPipe(stderr)
+
+	w.log("Executing: %s", cmd.String())
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	return cmd.Wait()
+}
+
+func (w *Worker) streamPipe(pipe io.Reader) {
+	scanner := bufio.NewScanner(pipe)
+	for scanner.Scan() {
+		w.log(scanner.Text())
+	}
 }
