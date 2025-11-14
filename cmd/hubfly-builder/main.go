@@ -66,7 +66,7 @@ func main() {
 	manager := executor.NewManager(storage, logManager, allowedCommands, buildkit, apiClient, registry, maxConcurrentBuilds)
 	go manager.Start()
 
-	server := server.NewServer(storage, logManager, manager)
+	server := server.NewServer(storage, logManager, manager, allowedCommands)
 
 	log.Println("Server listening on :8080")
 	if err := server.Start(":8080"); err != nil {

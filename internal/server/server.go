@@ -5,8 +5,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/exec"
 
 	"github.com/gorilla/mux"
+	"hubfly-builder/internal/allowlist"
+	"hubfly-builder/internal/autodetect"
 	"hubfly-builder/internal/executor"
 	"hubfly-builder/internal/logs"
 	"hubfly-builder/internal/storage"
@@ -16,13 +20,15 @@ type Server struct {
 	storage    *storage.Storage
 	logManager *logs.LogManager
 	manager    *executor.Manager
+	allowlist  *allowlist.AllowedCommands
 }
 
-func NewServer(storage *storage.Storage, logManager *logs.LogManager, manager *executor.Manager) *Server {
+func NewServer(storage *storage.Storage, logManager *logs.LogManager, manager *executor.Manager, allowlist *allowlist.AllowedCommands) *Server {
 	return &Server{
 		storage:    storage,
 		logManager: logManager,
 		manager:    manager,
+		allowlist:  allowlist,
 	}
 }
 
@@ -42,6 +48,41 @@ func (s *Server) CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&job); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+
+	if job.BuildConfig.IsAutoBuild {
+		// For auto-build, we need to clone the repo first to inspect it.
+		// This is a simplified approach. A more robust solution might involve
+		// a separate service to handle repo inspection before creating the job.
+		tempDir, err := os.MkdirTemp("", "hubfly-builder-autodetect-")
+		if err != nil {
+			http.Error(w, "failed to create temp dir for autodetect", http.StatusInternalServerError)
+			return
+		}
+		defer os.RemoveAll(tempDir)
+
+		cloneCmd := exec.Command("git", "clone", job.SourceInfo.GitRepository, tempDir)
+		if err := cloneCmd.Run(); err != nil {
+			http.Error(w, "failed to clone repository for autodetect", http.StatusBadRequest)
+			return
+		}
+
+		detectedConfig, err := autodetect.AutoDetectBuildConfig(tempDir, s.allowlist)
+		if err != nil {
+			http.Error(w, "failed to autodetect build config", http.StatusInternalServerError)
+			return
+		}
+		job.BuildConfig = storage.BuildConfig{
+			IsAutoBuild:       detectedConfig.IsAutoBuild,
+			Runtime:           detectedConfig.Runtime,
+			Version:           detectedConfig.Version,
+			PrebuildCommand:   detectedConfig.PrebuildCommand,
+			BuildCommand:      detectedConfig.BuildCommand,
+			RunCommand:        detectedConfig.RunCommand,
+			TimeoutSeconds:    job.BuildConfig.TimeoutSeconds,   // Keep original timeout
+			ResourceLimits:    job.BuildConfig.ResourceLimits,   // Keep original resource limits
+			DockerfileContent: detectedConfig.DockerfileContent,
+		}
 	}
 
 	if err := s.storage.CreateJob(&job); err != nil {
