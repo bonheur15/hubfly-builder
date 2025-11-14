@@ -18,6 +18,9 @@ type BuildConfig struct {
 }
 
 func DetectRuntime(repoPath string) (string, string) {
+	if fileExists(filepath.Join(repoPath, "bun.lockb")) {
+		return "bun", "1.0" // Simplified version detection
+	}
 	if fileExists(filepath.Join(repoPath, "package.json")) {
 		return "node", "18" // Simplified version detection
 	}
@@ -39,6 +42,10 @@ func DetectCommands(runtime string, allowed *allowlist.AllowedCommands) (string,
 		return pickAllowed("npm install", allowed.Prebuild),
 			pickAllowed("npm run build", allowed.Build),
 			pickAllowed("npm start", allowed.Run)
+	case "bun":
+		return pickAllowed("bun install", allowed.Prebuild),
+			pickAllowed("bun run build", allowed.Build),
+			pickAllowed("bun run start", allowed.Run)
 	case "python":
 		return pickAllowed("pip install -r requirements.txt", allowed.Prebuild),
 			pickAllowed("python setup.py build", allowed.Build),

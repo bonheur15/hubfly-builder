@@ -11,9 +11,28 @@ func GenerateDockerfile(runtime, version, prebuildCommand, buildCommand, runComm
 		return generatePythonDockerfile(version, prebuildCommand, buildCommand, runCommand), nil
 	case "go":
 		return generateGoDockerfile(version, prebuildCommand, buildCommand, runCommand), nil
+	case "bun":
+		return generateBunDockerfile(version, prebuildCommand, buildCommand, runCommand), nil
 	default:
 		return nil, fmt.Errorf("unsupported runtime: %s", runtime)
 	}
+}
+
+func generateBunDockerfile(version, prebuildCommand, buildCommand, runCommand string) []byte {
+	return []byte(fmt.Sprintf(`
+FROM oven/bun:%s
+
+WORKDIR /app
+
+COPY . .
+
+RUN %s
+RUN %s
+
+EXPOSE 3000
+
+CMD ["%s"]
+`, version, prebuildCommand, buildCommand, runCommand))
 }
 
 func generateNodeDockerfile(version, prebuildCommand, buildCommand, runCommand string) []byte {
