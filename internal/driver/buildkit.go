@@ -33,7 +33,7 @@ func (bk *BuildKit) BuildCommand(opts BuildOpts) *exec.Cmd {
 		"--frontend", "dockerfile.v0",
 		"--local", fmt.Sprintf("context=%s", opts.ContextPath),
 		"--local", fmt.Sprintf("dockerfile=%s", opts.Dockerfileath),
-		"--output", fmt.Sprintf("type=image,name=%s,push=true", opts.ImageTag),
+		"--output", fmt.Sprintf("type=image,name=%s,push=true,registry.insecure=true", opts.ImageTag),
 	}
 	return exec.Command("buildctl", args...)
 }

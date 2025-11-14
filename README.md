@@ -73,12 +73,12 @@ All endpoints are served on port `:8080`.
 - **Example:**
   ```bash
   curl -X POST http://localhost:8080/api/v1/jobs -H "Content-Type: application/json" -d '{
-    "id": "build_12",
+    "id": "build_19",
     "projectId": "my-project",
     "userId": "user_123",
     "sourceType": "git",
     "sourceInfo": {
-      "gitRepository": "https://github.com/your-username/your-bun-project.git",
+      "gitRepository": "https://github.com/bonheur15/hubfly-sample-react-bun.git",
       "commitSha": "abcdef",
       "ref": "main"
     },
