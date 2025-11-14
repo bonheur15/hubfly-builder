@@ -1,32 +1,22 @@
 package main
 
 import (
-	"fmt"
 	"log"
-	"net/http"
-	"os"
 
-	"github.com/gorilla/mux"
+	"hubfly-builder/internal/server"
+	"hubfly-builder/internal/storage"
 )
 
 func main() {
-	fmt.Println("Starting hubfly-builder...")
+	storage, err := storage.NewStorage("./hubfly-builder.sqlite")
+	if err != nil {
+		log.Fatalf("could not create storage: %s\n", err)
+	}
 
-	// Create a new router
-	r := mux.NewRouter()
+	server := server.NewServer(storage)
 
-	// Define routes
-	r.HandleFunc("/healthz", HealthCheckHandler).Methods("GET")
-
-	// Start the server
 	log.Println("Server listening on :8080")
-	if err := http.ListenAndServe(":8080", r); err != nil {
+	if err := server.Start(":8080"); err != nil {
 		log.Fatalf("could not start server: %s\n", err)
 	}
-}
-
-// HealthCheckHandler returns a 200 OK status
-func HealthCheckHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintln(w, "OK")
 }
