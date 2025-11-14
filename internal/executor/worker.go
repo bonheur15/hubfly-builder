@@ -15,7 +15,6 @@ import (
 
 	"hubfly-builder/internal/allowlist"
 	"hubfly-builder/internal/api"
-	"hubfly-builder/internal/autodetect"
 	"hubfly-builder/internal/driver"
 	"hubfly-builder/internal/logs"
 	"hubfly-builder/internal/storage"
@@ -130,19 +129,7 @@ func (w *Worker) Run() error {
 			return w.failJob("No build strategy found (e.g., Dockerfile missing and auto-build disabled)")
 		}
 
-		dockerfileContent, err := autodetect.GenerateDockerfile(
-			w.job.BuildConfig.Runtime,
-			w.job.BuildConfig.Version,
-			w.job.BuildConfig.PrebuildCommand,
-			w.job.BuildConfig.BuildCommand,
-			w.job.BuildConfig.RunCommand,
-		)
-		if err != nil {
-			w.log("ERROR: failed to generate Dockerfile: %v", err)
-			return w.failJob("failed to generate Dockerfile")
-		}
-
-		if err := os.WriteFile(dockerfilePath, dockerfileContent, 0644); err != nil {
+		if err := os.WriteFile(dockerfilePath, w.job.BuildConfig.DockerfileContent, 0644); err != nil {
 			w.log("ERROR: failed to write generated Dockerfile: %v", err)
 			return w.failJob("failed to write generated Dockerfile")
 		}

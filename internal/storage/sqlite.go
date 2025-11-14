@@ -83,14 +83,15 @@ type ResourceLimits struct {
 }
 
 type BuildConfig struct {
-	IsAutoBuild     bool           `json:"isAutoBuild"`
-	Runtime         string         `json:"runtime"`
-	Version         string         `json:"version"`
-	PrebuildCommand string         `json:"prebuildCommand"`
-	BuildCommand    string         `json:"buildCommand"`
-	RunCommand      string         `json:"runCommand"`
-	TimeoutSeconds  int            `json:"timeoutSeconds"`
-	ResourceLimits  ResourceLimits `json:"resourceLimits"`
+	IsAutoBuild       bool           `json:"isAutoBuild"`
+	Runtime           string         `json:"runtime"`
+	Version           string         `json:"version"`
+	PrebuildCommand   string         `json:"prebuildCommand"`
+	BuildCommand      string         `json:"buildCommand"`
+	RunCommand        string         `json:"runCommand"`
+	TimeoutSeconds    int            `json:"timeoutSeconds"`
+	ResourceLimits    ResourceLimits `json:"resourceLimits"`
+	DockerfileContent []byte         `json:"dockerfileContent,omitempty"`
 }
 
 func (a *BuildConfig) Value() (driver.Value, error) {

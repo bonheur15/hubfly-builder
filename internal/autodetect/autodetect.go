@@ -8,12 +8,13 @@ import (
 )
 
 type BuildConfig struct {
-	IsAutoBuild     bool   `json:"isAutoBuild"`
-	Runtime         string `json:"runtime"`
-	Version         string `json:"version"`
-	PrebuildCommand string `json:"prebuildCommand"`
-	BuildCommand    string `json:"buildCommand"`
-	RunCommand      string `json:"runCommand"`
+	IsAutoBuild       bool   `json:"isAutoBuild"`
+	Runtime           string `json:"runtime"`
+	Version           string `json:"version"`
+	PrebuildCommand   string `json:"prebuildCommand"`
+	BuildCommand      string `json:"buildCommand"`
+	RunCommand        string `json:"runCommand"`
+	DockerfileContent []byte `json:"dockerfileContent"`
 }
 
 func DetectRuntime(repoPath string) (string, string) {
@@ -60,18 +61,24 @@ func pickAllowed(preferred string, allowed []string) string {
 	return ""
 }
 
-func AutoDetectBuildConfig(repoPath string, allowed *allowlist.AllowedCommands) BuildConfig {
+func AutoDetectBuildConfig(repoPath string, allowed *allowlist.AllowedCommands) (BuildConfig, error) {
 	runtime, version := DetectRuntime(repoPath)
 	prebuild, build, run := DetectCommands(runtime, allowed)
 
-	return BuildConfig{
-		IsAutoBuild:     true,
-		Runtime:         runtime,
-		Version:         version,
-		PrebuildCommand: prebuild,
-		BuildCommand:    build,
-		RunCommand:      run,
+	dockerfileContent, err := GenerateDockerfile(runtime, version, prebuild, build, run)
+	if err != nil {
+		return BuildConfig{}, err
 	}
+
+	return BuildConfig{
+		IsAutoBuild:       true,
+		Runtime:           runtime,
+		Version:           version,
+		PrebuildCommand:   prebuild,
+		BuildCommand:      build,
+		RunCommand:        run,
+		DockerfileContent: dockerfileContent,
+	}, nil
 }
 
 func fileExists(path string) bool {
