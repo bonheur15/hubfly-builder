@@ -65,7 +65,7 @@ All endpoints are served on port `:8080`.
 - **Example:**
   ```bash
   curl -X POST http://localhost:8080/api/v1/jobs -H "Content-Type: application/json" -d '{
-    "id": "build_1",
+    "id": "build_2",
     "projectId": "my-project",
     "userId": "user_123",
     "sourceType": "git",
@@ -96,7 +96,7 @@ All endpoints are served on port `:8080`.
 - **Description:** Retrieves the status and details of a specific build job.
 - **Example:**
   ```bash
-  curl -X GET http://localhost:8080/api/v1/jobs/build_1
+  curl -X GET http://localhost:8080/api/v1/jobs/build_2
   ```
 
 ### Get Job Logs

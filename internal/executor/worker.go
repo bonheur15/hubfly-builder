@@ -120,9 +120,11 @@ func (w *Worker) Run() error {
 		w.job.ImageTag = imageTag
 		if err := w.storage.UpdateJobImageTag(w.job.ID, imageTag); err != nil {
 			w.log("ERROR: could not update image tag: %v", err)
+			// Don't fail the build for this, just log it
 		}
 	} else {
-		w.log("No Dockerfile found, skipping BuildKit build.")
+		w.log("ERROR: No Dockerfile found, and no other build strategy is implemented.")
+		return w.failJob("No build strategy found (e.g., Dockerfile missing)")
 	}
 
 	return w.succeedJob()
