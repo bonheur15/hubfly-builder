@@ -3,7 +3,6 @@ package autodetect
 import (
 	"os"
 	"path/filepath"
-	"strings"
 
 	"hubfly-builder/internal/allowlist"
 )
