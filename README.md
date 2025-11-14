@@ -20,7 +20,7 @@ Standalone Go Builder for Hubfly.
 - **Example:**
   ```bash
   curl -X POST http://localhost:8080/api/v1/jobs -H "Content-Type: application/json" -d '{
-    "id": "build_1231q2",
+    "id": "build_1231q211",
     "projectId": "proj_1",
     "userId": "user_1",
     "sourceType": "git",
@@ -51,5 +51,5 @@ Standalone Go Builder for Hubfly.
 - **Description:** Retrieves the status of a specific build job.
 - **Example:**
   ```bash
-  curl -X GET http://localhost:8080/api/v1/jobs/build_123
+  curl -X GET http://localhost:8080/api/v1/jobs/build_1231q211
   ```
