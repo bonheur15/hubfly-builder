@@ -2,6 +2,9 @@ package storage
 
 import (
 	"database/sql"
+	"database/sql/driver"
+	"encoding/json"
+	"errors"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -52,23 +55,77 @@ func createTables(db *sql.DB) error {
 	return err
 }
 
+type SourceInfo struct {
+	GitRepository string `json:"gitRepository"`
+	CommitSha     string `json:"commitSha"`
+	Ref           string `json:"ref"`
+}
+
+func (a *SourceInfo) Value() (driver.Value, error) {
+    return json.Marshal(a)
+}
+
+func (a *SourceInfo) Scan(value interface{}) error {
+    b, ok := value.([]byte)
+    if !ok {
+        s, ok := value.(string)
+        if !ok {
+            return errors.New("type assertion to []byte or string failed")
+        }
+        b = []byte(s)
+    }
+    return json.Unmarshal(b, &a)
+}
+
+type ResourceLimits struct {
+	CPU      int `json:"cpu"`
+	MemoryMB int `json:"memoryMB"`
+}
+
+type BuildConfig struct {
+	IsAutoBuild     bool           `json:"isAutoBuild"`
+	Runtime         string         `json:"runtime"`
+	Version         string         `json:"version"`
+	PrebuildCommand string         `json:"prebuildCommand"`
+	BuildCommand    string         `json:"buildCommand"`
+	RunCommand      string         `json:"runCommand"`
+	TimeoutSeconds  int            `json:"timeoutSeconds"`
+	ResourceLimits  ResourceLimits `json:"resourceLimits"`
+}
+
+func (a *BuildConfig) Value() (driver.Value, error) {
+    return json.Marshal(a)
+}
+
+func (a *BuildConfig) Scan(value interface{}) error {
+    b, ok := value.([]byte)
+    if !ok {
+        s, ok := value.(string)
+        if !ok {
+            return errors.New("type assertion to []byte or string failed")
+        }
+        b = []byte(s)
+    }
+    return json.Unmarshal(b, &a)
+}
+
 type BuildJob struct {
-	ID             string
-	ProjectID      string
-	UserID         string
-	SourceType     string
-	SourceInfo     string // JSON
-	BuildConfig    string // JSON
-	Status         string
-	ImageTag       string
-	StartedAt      sql.NullTime
-	FinishedAt     sql.NullTime
-	ExitCode       sql.NullInt64
-	RetryCount     int
-	LogPath        string
-	LastCheckpoint string // JSON
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID             string      `json:"id"`
+	ProjectID      string      `json:"projectId"`
+	UserID         string      `json:"userId"`
+	SourceType     string      `json:"sourceType"`
+	SourceInfo     SourceInfo  `json:"sourceInfo"`
+	BuildConfig    BuildConfig `json:"buildConfig"`
+	Status         string      `json:"status"`
+	ImageTag       string      `json:"imageTag"`
+	StartedAt      sql.NullTime `json:"startedAt"`
+	FinishedAt     sql.NullTime `json:"finishedAt"`
+	ExitCode       sql.NullInt64 `json:"exitCode"`
+	RetryCount     int         `json:"retryCount"`
+	LogPath        string      `json:"logPath"`
+	LastCheckpoint string      `json:"lastCheckpoint"`
+	CreatedAt      time.Time   `json:"createdAt"`
+	UpdatedAt      time.Time   `json:"updatedAt"`
 }
 
 func (s *Storage) CreateJob(job *BuildJob) error {
@@ -79,7 +136,7 @@ func (s *Storage) CreateJob(job *BuildJob) error {
 	_, err := s.db.Exec(`
 		INSERT INTO build_jobs (id, project_id, user_id, source_type, source_info, build_config, status, image_tag, started_at, finished_at, exit_code, retry_count, log_path, last_checkpoint, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, job.ID, job.ProjectID, job.UserID, job.SourceType, job.SourceInfo, job.BuildConfig, job.Status, job.ImageTag, job.StartedAt, job.FinishedAt, job.ExitCode, job.RetryCount, job.LogPath, job.LastCheckpoint, job.CreatedAt, job.UpdatedAt)
+	`, job.ID, job.ProjectID, job.UserID, job.SourceType, &job.SourceInfo, &job.BuildConfig, job.Status, job.ImageTag, job.StartedAt, job.FinishedAt, job.ExitCode, job.RetryCount, job.LogPath, job.LastCheckpoint, job.CreatedAt, job.UpdatedAt)
 
 	return err
 }
