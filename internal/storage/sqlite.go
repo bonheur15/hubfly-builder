@@ -74,6 +74,7 @@ type BuildJob struct {
 func (s *Storage) CreateJob(job *BuildJob) error {
 	job.CreatedAt = time.Now()
 	job.UpdatedAt = time.Now()
+	job.Status = "pending"
 
 	_, err := s.db.Exec(`
 		INSERT INTO build_jobs (id, project_id, user_id, source_type, source_info, build_config, status, image_tag, started_at, finished_at, exit_code, retry_count, log_path, last_checkpoint, created_at, updated_at)
