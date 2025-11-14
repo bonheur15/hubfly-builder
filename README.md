@@ -67,7 +67,7 @@ All endpoints are served on port `:8080`.
 - **Example:**
   ```bash
   curl -X POST http://localhost:8080/api/v1/jobs -H "Content-Type: application/json" -d '{
-    "id": "build_6",
+    "id": "build_8",
     "projectId": "my-project",
     "userId": "user_123",
     "sourceType": "git",
@@ -78,11 +78,11 @@ All endpoints are served on port `:8080`.
     },
     "buildConfig": {
       "isAutoBuild": true,
-      "runtime": "node",
-      "version": "18",
-      "prebuildCommand": "npm install",
-      "buildCommand": "npm run build",
-      "runCommand": "npm start",
+      "runtime": "bun",
+      "version": "1",
+      "prebuildCommand": "bun install",
+      "buildCommand": "bun run build",
+      "runCommand": "bun start",
       "timeoutSeconds": 1800,
       "resourceLimits": {
         "cpu": 1,
