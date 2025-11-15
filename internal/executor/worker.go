@@ -107,9 +107,9 @@ func (w *Worker) Run() error {
 		w.log("Image tag: %s", imageTag)
 
 		opts := driver.BuildOpts{
-			ContextPath:    w.workDir,
+			ContextPath:   w.workDir,
 			Dockerfileath: w.workDir,
-			ImageTag:       imageTag,
+			ImageTag:      imageTag,
 		}
 		buildCmd := w.buildkit.BuildCommand(opts)
 		if err := w.executeCommand(buildCmd); err != nil {
@@ -139,9 +139,9 @@ func (w *Worker) Run() error {
 		w.log("Image tag: %s", imageTag)
 
 		opts := driver.BuildOpts{
-			ContextPath:    w.workDir,
+			ContextPath:   w.workDir,
 			Dockerfileath: w.workDir,
-			ImageTag:       imageTag,
+			ImageTag:      imageTag,
 		}
 		buildCmd := w.buildkit.BuildCommand(opts)
 		if err := w.executeCommand(buildCmd); err != nil {

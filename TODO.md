@@ -8,4 +8,8 @@ sudo mv bin/buildkitd /usr/local/bin/
 sudo chmod +x /usr/local/bin/buildctl /usr/local/bin/buildkitd
 
 
-curl -s http://localhost:5000/v2/_catalog | jq -r '.repositories[]'
+curl -s http://100.106.206.92:32768/v2/_catalog | jq -r '.repositories[]'
+curl -s http://100.106.206.92:32768/v2/user-123/my-project/tags/list
+
+curl -s -I -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+  http://100.106.206.92:32768/v2/user-123/my-project/manifests/latest
