@@ -50,7 +50,7 @@ This service receives build jobs, executes them using BuildKit, streams logs, pu
     export REGISTRY_URL="100.106.206.92:32768"
     export CALLBACK_URL="http://localhost:3000/api/builds/callback" # Your backend endpoint
 
-    go run ./cmd/hubfly-builder
+    go run ./cmd/hubfly-builder/main.go
     ```
 
 ## Endpoints
@@ -73,7 +73,7 @@ All endpoints are served on port `:8080`.
 - **Example:**
   ```bash
   curl -X POST http://localhost:8080/api/v1/jobs -H "Content-Type: application/json" -d '{
-    "id": "build_21",
+    "id": "build_26",
     "projectId": "my-project",
     "userId": "user_123",
     "sourceType": "git",
@@ -86,9 +86,9 @@ All endpoints are served on port `:8080`.
       "isAutoBuild": true,
       "runtime": "bun",
       "version": "1",
-      "prebuildCommand": "bun install",
-      "buildCommand": "bun run build",
-      "runCommand": "bun start",
+      "prebuildCommand": "",
+      "buildCommand": "",
+      "runCommand": "",
       "timeoutSeconds": 1800,
       "resourceLimits": {
         "cpu": 1,
@@ -104,7 +104,7 @@ All endpoints are served on port `:8080`.
 - **Description:** Retrieves the status and details of a specific build job.
 - **Example:**
   ```bash
-  curl -X GET http://localhost:8080/api/v1/jobs/build_2
+  curl -X GET http://localhost:8080/api/v1/jobs/build_26
   ```
 
 ### Get Job Logs
@@ -113,7 +113,7 @@ All endpoints are served on port `:8080`.
 - **Description:** Retrieves the logs for a specific build job.
 - **Example:**
   ```bash
-  curl -X GET http://localhost:8080/api/v1/jobs/build_1/logs
+  curl -X GET http://localhost:8080/api/v1/jobs/build_26/logs
   ```
 
 ### List Running Builds (Dev Endpoint)
