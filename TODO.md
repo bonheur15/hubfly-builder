@@ -13,3 +13,13 @@ curl -s http://100.106.206.92:32768/v2/user-123/my-project/tags/list
 
 curl -s -I -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
   http://100.106.206.92:32768/v2/user-123/my-project/manifests/latest
+
+
+
+
+sudo mkdir -p /etc/docker
+sudo nano /etc/docker/daemon.json
+{
+  "insecure-registries": ["100.106.206.92:32768"]
+}
+sudo systemctl restart docker
