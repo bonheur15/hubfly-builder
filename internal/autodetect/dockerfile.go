@@ -31,7 +31,7 @@ RUN %s
 
 EXPOSE 3000
 
-CMD ["%s"]
+CMD %s
 `, version, prebuildCommand, buildCommand, runCommand))
 }
 
@@ -48,7 +48,7 @@ RUN %s
 
 EXPOSE 3000
 
-CMD ["%s"]
+CMD %s
 `, version, prebuildCommand, buildCommand, runCommand))
 }
 
@@ -65,7 +65,7 @@ RUN %s
 
 EXPOSE 8000
 
-CMD ["%s"]
+CMD %s
 `, version, prebuildCommand, buildCommand, runCommand))
 }
 
@@ -82,6 +82,6 @@ RUN %s
 
 EXPOSE 8080
 
-CMD ["%s"]
+CMD %s
 `, version, prebuildCommand, buildCommand, runCommand))
 }
