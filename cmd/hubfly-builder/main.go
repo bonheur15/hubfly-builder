@@ -69,7 +69,7 @@ func main() {
 	server := server.NewServer(storage, logManager, manager, allowedCommands)
 
 	log.Println("Server listening on :8781")
-	if err := server.Start(":8080"); err != nil {
+	if err := server.Start(":8781"); err != nil {
 		log.Fatalf("could not start server: %s\n", err)
 	}
 }
