@@ -1,4 +1,4 @@
-# hubfly-builder
+# hubfly builder
 
 Standalone Go Builder for Hubfly.
 
