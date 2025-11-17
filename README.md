@@ -125,3 +125,12 @@ All endpoints are served on port `:8080`.
   ```bash
   curl -X GET http://localhost:8080/dev/running-builds
   ```
+
+### Restart Docker Service(to be done)
+
+- **Endpoint:** `POST /dev/restart-docker`
+- **Description:** Restarts the Docker service.
+- **Example:**
+  ```bash
+  curl -X POST http://localhost:8080/dev/restart-docker
+  ```
