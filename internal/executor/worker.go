@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"hubfly-builder/internal/allowlist"
@@ -198,20 +199,33 @@ func (w *Worker) executeCommand(cmd *exec.Cmd) error {
 	if err != nil {
 		return err
 	}
-	go w.streamPipe(stdout)
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return err
 	}
-	go w.streamPipe(stderr)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		w.streamPipe(stdout)
+	}()
+
+	go func() {
+		defer wg.Done()
+		w.streamPipe(stderr)
+	}()
 
 	w.log("Executing: %s", cmd.String())
 	if err := cmd.Start(); err != nil {
 		return err
 	}
 
-	return cmd.Wait()
+	err = cmd.Wait()
+	wg.Wait()
+	return err
 }
 
 func (w *Worker) streamPipe(pipe io.Reader) {

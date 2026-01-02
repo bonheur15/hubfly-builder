@@ -30,6 +30,7 @@ func (bk *BuildKit) BuildCommand(opts BuildOpts) *exec.Cmd {
 	args := []string{
 		"--addr", bk.Addr,
 		"build",
+		"--progress=plain",
 		"--frontend", "dockerfile.v0",
 		"--local", fmt.Sprintf("context=%s", opts.ContextPath),
 		"--local", fmt.Sprintf("dockerfile=%s", opts.Dockerfileath),
