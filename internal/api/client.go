@@ -3,6 +3,10 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"log"
+	"math"
+	"math/rand"
 	"net/http"
 	"time"
 
@@ -42,13 +46,13 @@ func (c *Client) ReportResult(job *storage.BuildJob, status, errorMsg string) er
 	}
 
 	payload := ReportPayload{
-		ID:              job.ID,
-		ProjectID:       job.ProjectID,
-		UserID:          job.UserID,
-		Status:          status,
-		ImageTag:        job.ImageTag,
-		LogPath:         job.LogPath,
-		Error:           errorMsg,
+		ID:        job.ID,
+		ProjectID: job.ProjectID,
+		UserID:    job.UserID,
+		Status:    status,
+		ImageTag:  job.ImageTag,
+		LogPath:   job.LogPath,
+		Error:     errorMsg,
 	}
 	if !job.StartedAt.Time.IsZero() {
 		payload.StartedAt = job.StartedAt.Time
@@ -56,24 +60,49 @@ func (c *Client) ReportResult(job *storage.BuildJob, status, errorMsg string) er
 		payload.DurationSeconds = payload.FinishedAt.Sub(payload.StartedAt).Seconds()
 	}
 
-
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
 
-	req, err := http.NewRequest("POST", c.callbackURL, bytes.NewBuffer(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
+	const maxRetries = 5
+	const baseDelay = 2 * time.Second
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
+	var lastErr error
 
-	// TODO: Handle non-2xx responses and implement retries
-	return nil
+	for i := 0; i <= maxRetries; i++ {
+		if i > 0 {
+			// Exponential backoff: 2s, 4s, 8s, 16s, 32s
+			backoff := float64(baseDelay) * math.Pow(2, float64(i-1))
+			// Add jitter: +/- 20%
+			jitter := (rand.Float64() * 0.4) - 0.2
+			sleepDuration := time.Duration(backoff * (1 + jitter))
+			log.Printf("Retrying callback for job %s in %v (attempt %d/%d)", job.ID, sleepDuration, i, maxRetries)
+			time.Sleep(sleepDuration)
+		}
+
+		req, err := http.NewRequest("POST", c.callbackURL, bytes.NewBuffer(body))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			lastErr = err
+			log.Printf("WARN: callback request failed for job %s: %v", job.ID, err)
+			continue
+		}
+
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			resp.Body.Close()
+			return nil
+		}
+
+		lastErr = fmt.Errorf("backend returned non-2xx status: %d", resp.StatusCode)
+		log.Printf("WARN: callback request returned error for job %s: %v", job.ID, lastErr)
+		resp.Body.Close()
+	}
+
+	return fmt.Errorf("failed to report result after %d attempts: %w", maxRetries, lastErr)
 }

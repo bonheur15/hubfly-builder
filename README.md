@@ -49,7 +49,7 @@ This service receives build jobs, executes them using BuildKit, streams logs, pu
     # Example:
     export REGISTRY_URL="100.117.248.57:32768"
     # export REGISTRY_URL="localhost:32768"
-    # export CALLBACK_URL="http://localhost:3000/api/builds/callback" # Your backend endpoint
+    # export CALLBACK_URL="http://100.75.102.9:3000/api/builds/callback" # Your backend endpoint
     # export CALLBACK_URL="https://hubfly.space/api/builds/callback"
 
     go run ./cmd/hubfly-builder/main.go
@@ -115,7 +115,7 @@ All endpoints are served on port `:8781`.
 - **Description:** Retrieves the logs for a specific build job.
 - **Example:**
   ```bash
-  curl -X GET http://localhost:8080/api/v1/jobs/build_26/logs
+  curl -X GET http://100.117.248.57:8781/api/v1/jobs/build_50f3357d-e64a-4850-a761-30d6f140c665/logs
   ```
 
 ### List Running Builds (Dev Endpoint)
@@ -124,7 +124,7 @@ All endpoints are served on port `:8781`.
 - **Description:** A development-only endpoint that returns a list of jobs currently in the 'claimed' or 'building' state.
 - **Example:**
   ```bash
-  curl -X GET http://localhost:8080/dev/running-builds
+  curl -X GET http://100.117.248.57:8781/dev/running-builds
   ```
 
 ### Restart Docker Service(to be done)
