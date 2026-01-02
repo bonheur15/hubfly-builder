@@ -15,6 +15,7 @@ import (
 
 	"hubfly-builder/internal/allowlist"
 	"hubfly-builder/internal/api"
+	"hubfly-builder/internal/autodetect"
 	"hubfly-builder/internal/driver"
 	"hubfly-builder/internal/logs"
 	"hubfly-builder/internal/storage"
@@ -86,23 +87,15 @@ func (w *Worker) Run() error {
 	}
 	w.log("Repository cloned successfully.")
 
-	if w.job.BuildConfig.PrebuildCommand != "" {
-		if !allowlist.IsCommandAllowed(w.job.BuildConfig.PrebuildCommand, w.allowlist.Prebuild) {
-			w.log("ERROR: pre-build command is not allowed: %s", w.job.BuildConfig.PrebuildCommand)
-			return w.failJob("pre-build command not allowed")
-		}
-		preBuildCmd := exec.Command("sh", "-c", w.job.BuildConfig.PrebuildCommand)
-		preBuildCmd.Dir = w.workDir
-		if err := w.executeCommand(preBuildCmd); err != nil {
-			w.log("ERROR: pre-build command failed: %v", err)
-			return w.failJob("pre-build command failed")
-		}
-		w.log("Pre-build command finished successfully.")
-	}
-
 	dockerfilePath := filepath.Join(w.workDir, "Dockerfile")
 	if _, err := os.Stat(dockerfilePath); err == nil {
 		w.log("Dockerfile found, starting BuildKit build...")
+
+		// Warn if PrebuildCommand is ignored
+		if w.job.BuildConfig.PrebuildCommand != "" {
+			w.log("WARNING: PrebuildCommand '%s' is ignored because a Dockerfile was provided. Please include pre-build steps in your Dockerfile.", w.job.BuildConfig.PrebuildCommand)
+		}
+
 		imageTag := w.generateImageTag()
 		w.log("Image tag: %s", imageTag)
 
@@ -123,13 +116,26 @@ func (w *Worker) Run() error {
 			// Don't fail the build for this, just log it
 		}
 	} else {
-		w.log("No Dockerfile found, attempting to generate one...")
+		w.log("No Dockerfile found, attempting to auto-detect and generate...")
 		if !w.job.BuildConfig.IsAutoBuild {
 			w.log("ERROR: Auto-build is not enabled for this job.")
 			return w.failJob("No build strategy found (e.g., Dockerfile missing and auto-build disabled)")
 		}
 
-		if err := os.WriteFile(dockerfilePath, w.job.BuildConfig.DockerfileContent, 0644); err != nil {
+		// Detect config and generate Dockerfile content
+		detectedConfig, err := autodetect.AutoDetectBuildConfig(w.workDir, w.allowlist)
+		if err != nil {
+			w.log("ERROR: failed to auto-detect build config: %v", err)
+			return w.failJob("failed to auto-detect build config")
+		}
+
+		w.log("Auto-detected runtime: %s, version: %s", detectedConfig.Runtime, detectedConfig.Version)
+		if detectedConfig.PrebuildCommand != "" {
+			w.log("Auto-detected pre-build command: %s", detectedConfig.PrebuildCommand)
+		}
+
+		// Write the generated Dockerfile
+		if err := os.WriteFile(dockerfilePath, detectedConfig.DockerfileContent, 0644); err != nil {
 			w.log("ERROR: failed to write generated Dockerfile: %v", err)
 			return w.failJob("failed to write generated Dockerfile")
 		}
