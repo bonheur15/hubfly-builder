@@ -47,7 +47,7 @@ This service receives build jobs, executes them using BuildKit, streams logs, pu
 
     ```bash
     # Example:
-    export REGISTRY_URL="100.106.206.92:32768"
+    export REGISTRY_URL="100.117.248.57:32768"
     # export REGISTRY_URL="localhost:32768"
     # export CALLBACK_URL="http://localhost:3000/api/builds/callback" # Your backend endpoint
     # export CALLBACK_URL="https://hubfly.space/api/builds/callback"
