@@ -13,9 +13,25 @@ func GenerateDockerfile(runtime, version, prebuildCommand, buildCommand, runComm
 		return generateGoDockerfile(version, prebuildCommand, buildCommand, runCommand), nil
 	case "bun":
 		return generateBunDockerfile(version, prebuildCommand, buildCommand, runCommand), nil
+	case "static":
+		return generateStaticDockerfile(), nil
 	default:
 		return nil, fmt.Errorf("unsupported runtime: %s", runtime)
 	}
+}
+
+func generateStaticDockerfile() []byte {
+	return []byte(`
+FROM nginx:alpine
+
+WORKDIR /usr/share/nginx/html
+
+COPY . .
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
+`)
 }
 
 func generateBunDockerfile(version, prebuildCommand, buildCommand, runCommand string) []byte {

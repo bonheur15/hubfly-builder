@@ -33,11 +33,16 @@ func DetectRuntime(repoPath string) (string, string) {
 	if fileExists(filepath.Join(repoPath, "composer.json")) {
 		return "php", "8"
 	}
+	if fileExists(filepath.Join(repoPath, "index.html")) {
+		return "static", "latest"
+	}
 	return "unknown", ""
 }
 
 func DetectCommands(runtime string, allowed *allowlist.AllowedCommands) (string, string, string) {
 	switch runtime {
+	case "static":
+		return "", "", ""
 	case "node":
 		return pickAllowed("npm install", allowed.Prebuild),
 			pickAllowed("npm run build", allowed.Build),

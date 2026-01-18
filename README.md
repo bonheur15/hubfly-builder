@@ -23,6 +23,7 @@ This service receives build jobs, executes them using BuildKit, streams logs, pu
 - Python
 - Go
 - Bun
+- Static HTML
 
 ## Getting Started
 
