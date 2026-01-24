@@ -32,6 +32,19 @@ func (m *LogManager) CreateLogFile(jobID string) (string, *os.File, error) {
 	return logPath, f, nil
 }
 
+func (m *LogManager) CreateSystemLogFile() (string, *os.File, error) {
+	ts := time.Now().UTC().Format("20060102T150405Z")
+	logName := fmt.Sprintf("system-%s.log", ts)
+	logPath := filepath.Join(m.logDir, logName)
+
+	f, err := os.Create(logPath)
+	if err != nil {
+		return "", nil, err
+	}
+
+	return logPath, f, nil
+}
+
 func (m *LogManager) GetLog(logPath string) ([]byte, error) {
 	return os.ReadFile(logPath)
 }

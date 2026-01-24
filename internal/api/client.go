@@ -64,6 +64,7 @@ func (c *Client) ReportResult(job *storage.BuildJob, status, errorMsg string) er
 	if err != nil {
 		return err
 	}
+	log.Printf("Callback payload for job %s: %s", job.ID, string(body))
 
 	const maxRetries = 5
 	const baseDelay = 2 * time.Second

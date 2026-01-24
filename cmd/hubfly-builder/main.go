@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"log"
 	"os"
 	"time"
@@ -28,6 +29,7 @@ func main() {
 		registry = "localhost:5000" // Example registry
 	}
 	callbackURL := os.Getenv("CALLBACK_URL") // e.g., "http://localhost:3000/api/builds/callback"
+	buildkitHost := os.Getenv("BUILDKIT_HOST")
 
 	allowedCommands, err := allowlist.LoadAllowedCommands("configs/allowed-commands.json")
 	if err != nil {
@@ -47,6 +49,17 @@ func main() {
 	if err != nil {
 		log.Fatalf("could not create log manager: %s\n", err)
 	}
+
+	systemLogPath, systemLogFile, err := logManager.CreateSystemLogFile()
+	if err != nil {
+		log.Fatalf("could not create system log file: %s\n", err)
+	}
+	defer systemLogFile.Close()
+	log.SetOutput(io.MultiWriter(os.Stdout, systemLogFile))
+	log.SetFlags(log.LstdFlags | log.LUTC)
+	log.Printf("System log file: %s", systemLogPath)
+	log.Printf("Env: BUILDKIT_ADDR=%q BUILDKIT_HOST=%q REGISTRY_URL=%q CALLBACK_URL=%q", os.Getenv("BUILDKIT_ADDR"), buildkitHost, os.Getenv("REGISTRY_URL"), os.Getenv("CALLBACK_URL"))
+	log.Printf("Effective: BUILDKIT_ADDR=%q REGISTRY_URL=%q CALLBACK_URL=%q", buildkitAddr, registry, callbackURL)
 
 	// Start log cleanup routine
 	go func() {

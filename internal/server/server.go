@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -45,7 +46,13 @@ func (s *Server) Start(addr string) error {
 
 func (s *Server) CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 	var job storage.BuildJob
-	if err := json.NewDecoder(r.Body).Decode(&job); err != nil {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	log.Printf("Incoming %s %s payload: %s", r.Method, r.URL.Path, string(body))
+	if err := json.Unmarshal(body, &job); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
