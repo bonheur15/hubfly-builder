@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
 	"log"
 	"os"
@@ -18,7 +19,60 @@ import (
 const maxConcurrentBuilds = 3
 const logRetentionDays = 7
 
+type EnvConfig struct {
+	BuildkitAddr string `json:"BUILDKIT_ADDR"`
+	BuildkitHost string `json:"BUILDKIT_HOST"`
+	RegistryURL  string `json:"REGISTRY_URL"`
+	CallbackURL  string `json:"CALLBACK_URL"`
+}
+
+func loadOrInitEnvConfig() {
+	filename := "env.json"
+	if _, err := os.Stat(filename); os.IsNotExist(err) {
+		config := EnvConfig{
+			BuildkitAddr: "",
+			BuildkitHost: "",
+			RegistryURL:  "",
+			CallbackURL:  "",
+		}
+		data, _ := json.MarshalIndent(config, "", "  ")
+		if err := os.WriteFile(filename, data, 0644); err != nil {
+			log.Printf("WARN: could not create default %s: %v", filename, err)
+		} else {
+			log.Printf("Created default %s", filename)
+		}
+	}
+
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		log.Printf("WARN: could not read %s: %v", filename, err)
+		return
+	}
+
+	var config EnvConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		log.Printf("WARN: could not parse %s: %v", filename, err)
+		return
+	}
+
+	// Set environment variables if they are present in the config
+	if config.BuildkitAddr != "" {
+		os.Setenv("BUILDKIT_ADDR", config.BuildkitAddr)
+	}
+	if config.BuildkitHost != "" {
+		os.Setenv("BUILDKIT_HOST", config.BuildkitHost)
+	}
+	if config.RegistryURL != "" {
+		os.Setenv("REGISTRY_URL", config.RegistryURL)
+	}
+	if config.CallbackURL != "" {
+		os.Setenv("CALLBACK_URL", config.CallbackURL)
+	}
+}
+
 func main() {
+	loadOrInitEnvConfig()
+
 	// In a real app, get these from config/flags
 	buildkitAddr := os.Getenv("BUILDKIT_ADDR")
 	if buildkitAddr == "" {
