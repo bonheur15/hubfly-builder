@@ -45,10 +45,10 @@ This service receives build jobs, executes them using BuildKit, streams logs, pu
     ```
 
 2.  **Run the builder service:**
-    The service can be configured via environment variables or an `env.json` file in the root directory.
+    The service can be configured via environment variables or a `configs/env.json` file.
 
-    **Configuration via `env.json`:**
-    If `env.json` does not exist, the builder will create a default one on startup:
+    **Configuration via `configs/env.json`:**
+    If `configs/env.json` does not exist, the builder will create a default one on startup:
     ```json
     {
       "BUILDKIT_ADDR": "",
@@ -57,7 +57,7 @@ This service receives build jobs, executes them using BuildKit, streams logs, pu
       "CALLBACK_URL": ""
     }
     ```
-    Values provided in `env.json` will be set as environment variables.
+    Values provided in `configs/env.json` will be set as environment variables.
 
     **Example startup:**
     ```bash

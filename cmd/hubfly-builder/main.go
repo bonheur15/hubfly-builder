@@ -27,8 +27,14 @@ type EnvConfig struct {
 }
 
 func loadOrInitEnvConfig() {
-	filename := "env.json"
+	filename := "configs/env.json"
 	if _, err := os.Stat(filename); os.IsNotExist(err) {
+		// Ensure configs directory exists
+		if err := os.MkdirAll("configs", 0755); err != nil {
+			log.Printf("WARN: could not create configs directory: %v", err)
+			return
+		}
+
 		config := EnvConfig{
 			BuildkitAddr: "",
 			BuildkitHost: "",
