@@ -12,6 +12,7 @@ This service receives build jobs, executes them using BuildKit, streams logs, pu
 - **BuildKit Integration:** Uses `buildctl` to build Dockerfiles and push images to a registry.
 - **Command Allowlist:** Restricts executable commands to a safe list defined in `configs/allowed-commands.json`.
 - **Backend Reporting:** Reports build status (success or failure) back to a configurable webhook URL.
+- **System Logging:** Writes system-level logs (startup env, API payloads, callback payloads) to `./log/system-<timestamp>.log`, and cleans up old logs based on the retention policy.
 - **Automatic Cleanup:**
   - Workspaces are automatically cleaned up after each build.
   - Old log files are periodically deleted based on a retention policy.
@@ -114,6 +115,8 @@ All endpoints are served on port `:8781`.
 
 - **Endpoint:** `GET /api/v1/jobs/{id}/logs`
 - **Description:** Retrieves the logs for a specific build job.
+- **Errors:**
+  - `BUILD_LOG_NOT_FOUND` (404) if the job exists but its log file is missing or not yet available.
 - **Example:**
   ```bash
   curl -X GET http://100.117.248.57:8781/api/v1/jobs/build_50f3357d-e64a-4850-a761-30d6f140c665/logs

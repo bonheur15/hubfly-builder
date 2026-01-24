@@ -131,12 +131,16 @@ func (s *Server) GetJobLogsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if job.LogPath == "" {
-		http.Error(w, "logs not available yet", http.StatusNotFound)
+		writeBuildLogNotFound(w)
 		return
 	}
 
 	logs, err := s.logManager.GetLog(job.LogPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			writeBuildLogNotFound(w)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -144,6 +148,15 @@ func (s *Server) GetJobLogsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(http.StatusOK)
 	w.Write(logs)
+}
+
+func writeBuildLogNotFound(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotFound)
+	json.NewEncoder(w).Encode(map[string]string{
+		"error":   "BUILD_LOG_NOT_FOUND",
+		"message": "build log not found",
+	})
 }
 
 func (s *Server) GetRunningBuildsHandler(w http.ResponseWriter, r *http.Request) {
