@@ -1,4 +1,5 @@
-implement way to reset hubfly-builder.sqlite
+docker run -d -p 5000:5000 --restart always --name registry registry:3
+
 LATEST=$(curl -s https://api.github.com/repos/moby/buildkit/releases/latest | grep browser_download_url | grep linux |grep amd64 | cut -d '"' -f 4)
 
 wget $LATEST -O buildkit.tgz

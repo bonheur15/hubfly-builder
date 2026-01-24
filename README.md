@@ -51,10 +51,10 @@ This service receives build jobs, executes them using BuildKit, streams logs, pu
     If `configs/env.json` does not exist, the builder will create a default one on startup:
     ```json
     {
-      "BUILDKIT_ADDR": "",
-      "BUILDKIT_HOST": "",
-      "REGISTRY_URL": "",
-      "CALLBACK_URL": ""
+      "BUILDKIT_ADDR": "docker-container://buildkitd",
+      "BUILDKIT_HOST": "docker-container://buildkitd",
+      "REGISTRY_URL": "100.117.248.57:5000",
+      "CALLBACK_URL": "https://hubfly.space/api/builds/callback"
     }
     ```
     Values provided in `configs/env.json` will be set as environment variables.
@@ -74,7 +74,7 @@ All endpoints are served on port `:8781`.
 - **Description:** Returns a 200 OK status if the service is running.
 - **Example:**
   ```bash
-  curl -i -X GET http://localhost:8080/healthz
+  curl -i -X GET http://localhost:8781/healthz
   ```
 
 ### Create a Build Job
@@ -83,7 +83,7 @@ All endpoints are served on port `:8781`.
 - **Description:** Creates a new build job. The job is added to the queue and will be picked up by the executor.
 - **Example:**
   ```bash
-  curl -X POST http://localhost:8080/api/v1/jobs -H "Content-Type: application/json" -d '{
+  curl -X POST http://localhost:8781/api/v1/jobs -H "Content-Type: application/json" -d '{
     "id": "build_26",
     "projectId": "my-project",
     "userId": "user_123",
@@ -91,7 +91,8 @@ All endpoints are served on port `:8781`.
     "sourceInfo": {
       "gitRepository": "https://github.com/bonheur15/hubfly-sample-react-bun.git",
       "commitSha": "abcdef",
-      "ref": "main"
+      "ref": "main",
+      "workingDirectory": ""
     },
     "buildConfig": {
       "isAutoBuild": true,
