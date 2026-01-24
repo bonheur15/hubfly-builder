@@ -1,7 +1,9 @@
 package server
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -111,7 +113,11 @@ func (s *Server) GetJobHandler(w http.ResponseWriter, r *http.Request) {
 
 	job, err := s.storage.GetJob(id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		if errors.Is(err, sql.ErrNoRows) {
+			writeJobNotFound(w)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -126,7 +132,11 @@ func (s *Server) GetJobLogsHandler(w http.ResponseWriter, r *http.Request) {
 
 	job, err := s.storage.GetJob(id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		if errors.Is(err, sql.ErrNoRows) {
+			writeJobNotFound(w)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -156,6 +166,15 @@ func writeBuildLogNotFound(w http.ResponseWriter) {
 	json.NewEncoder(w).Encode(map[string]string{
 		"error":   "BUILD_LOG_NOT_FOUND",
 		"message": "build log not found",
+	})
+}
+
+func writeJobNotFound(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotFound)
+	json.NewEncoder(w).Encode(map[string]string{
+		"error":   "JOB_NOT_FOUND",
+		"message": "job not found",
 	})
 }
 

@@ -116,6 +116,7 @@ All endpoints are served on port `:8781`.
 - **Endpoint:** `GET /api/v1/jobs/{id}/logs`
 - **Description:** Retrieves the logs for a specific build job.
 - **Errors:**
+  - `JOB_NOT_FOUND` (404) if the job does not exist.
   - `BUILD_LOG_NOT_FOUND` (404) if the job exists but its log file is missing or not yet available.
 - **Example:**
   ```bash
