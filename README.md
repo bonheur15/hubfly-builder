@@ -45,15 +45,22 @@ This service receives build jobs, executes them using BuildKit, streams logs, pu
     ```
 
 2.  **Run the builder service:**
-    The service can be configured via environment variables.
+    The service can be configured via environment variables or an `env.json` file in the root directory.
 
+    **Configuration via `env.json`:**
+    If `env.json` does not exist, the builder will create a default one on startup:
+    ```json
+    {
+      "BUILDKIT_ADDR": "",
+      "BUILDKIT_HOST": "",
+      "REGISTRY_URL": "",
+      "CALLBACK_URL": ""
+    }
+    ```
+    Values provided in `env.json` will be set as environment variables.
+
+    **Example startup:**
     ```bash
-    # Example:
-    export REGISTRY_URL="100.117.248.57:32768"
-    # export REGISTRY_URL="localhost:32768"
-    # export CALLBACK_URL="http://100.75.102.9:3000/api/builds/callback" # Your backend endpoint
-    # export CALLBACK_URL="https://hubfly.space/api/builds/callback"
-
     go run ./cmd/hubfly-builder/main.go
     ```
 
