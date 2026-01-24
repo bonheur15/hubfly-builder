@@ -90,9 +90,8 @@ All endpoints are served on port `:8781`.
     "sourceType": "git",
     "sourceInfo": {
       "gitRepository": "https://github.com/bonheur15/hubfly-sample-react-bun.git",
-      "commitSha": "abcdef",
-      "ref": "main",
-      "workingDirectory": ""
+      "commitSha": "",
+      "ref": "main"
     },
     "buildConfig": {
       "isAutoBuild": true,
