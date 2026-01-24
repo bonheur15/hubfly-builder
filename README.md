@@ -139,6 +139,15 @@ All endpoints are served on port `:8781`.
   curl -X GET http://100.117.248.57:8781/dev/running-builds
   ```
 
+### Reset Database (Dev Endpoint)
+
+- **Endpoint:** `POST /dev/reset-db`
+- **Description:** A development-only endpoint that deletes all build jobs from the database.
+- **Example:**
+  ```bash
+  curl -X POST http://localhost:8781/dev/reset-db
+  ```
+
 ### Restart Docker Service(to be done)
 
 - **Endpoint:** `POST /dev/restart-docker`

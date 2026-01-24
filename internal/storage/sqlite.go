@@ -349,53 +349,13 @@ func (s *Storage) IncrementJobRetryCount(id string) error {
 
 
 func (s *Storage) ResetInProgressJobs() error {
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 	_, err := s.db.Exec(`UPDATE build_jobs SET status = 'pending' WHERE status = 'claimed' OR status = 'building'`)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 	return err
+}
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+func (s *Storage) ResetDatabase() error {
+	_, err := s.db.Exec(`DELETE FROM build_jobs`)
+	return err
 }
 
 

@@ -41,6 +41,7 @@ func (s *Server) Start(addr string) error {
 	r.HandleFunc("/api/v1/jobs/{id}", s.GetJobHandler).Methods("GET")
 	r.HandleFunc("/api/v1/jobs/{id}/logs", s.GetJobLogsHandler).Methods("GET")
 	r.HandleFunc("/dev/running-builds", s.GetRunningBuildsHandler).Methods("GET")
+	r.HandleFunc("/dev/reset-db", s.ResetDatabaseHandler).Methods("POST")
 	r.HandleFunc("/healthz", HealthCheckHandler).Methods("GET")
 
 	return http.ListenAndServe(addr, r)
@@ -195,6 +196,15 @@ func (s *Server) GetRunningBuildsHandler(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(runningBuilds)
+}
+
+func (s *Server) ResetDatabaseHandler(w http.ResponseWriter, r *http.Request) {
+	if err := s.storage.ResetDatabase(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintln(w, "Database reset successful")
 }
 
 func HealthCheckHandler(w http.ResponseWriter, r *http.Request) {
