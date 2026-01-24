@@ -147,12 +147,3 @@ All endpoints are served on port `:8781`.
   ```bash
   curl -X POST http://localhost:8781/dev/reset-db
   ```
-
-### Restart Docker Service(to be done)
-
-- **Endpoint:** `POST /dev/restart-docker`
-- **Description:** Restarts the Docker service.
-- **Example:**
-  ```bash
-  curl -X POST http://localhost:8080/dev/restart-docker
-  ```
