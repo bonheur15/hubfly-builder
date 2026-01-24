@@ -86,11 +86,37 @@ func (w *Worker) Run() error {
 		w.log("ERROR: failed to clone repository: %v", err)
 		return w.failJob("failed to clone repository")
 	}
-	w.log("Repository cloned successfully.")
 
-	dockerfilePath := filepath.Join(w.workDir, "Dockerfile")
+	if w.job.SourceInfo.Ref != "" {
+		w.log("Checking out ref: %s", w.job.SourceInfo.Ref)
+		checkoutRefCmd := exec.Command("git", "-C", w.workDir, "checkout", w.job.SourceInfo.Ref)
+		if err := w.executeCommand(checkoutRefCmd); err != nil {
+			w.log("ERROR: failed to checkout ref %s: %v", w.job.SourceInfo.Ref, err)
+			return w.failJob("failed to checkout ref")
+		}
+	}
+
+	if w.job.SourceInfo.CommitSha != "" {
+		w.log("Checking out commit SHA: %s", w.job.SourceInfo.CommitSha)
+		checkoutShaCmd := exec.Command("git", "-C", w.workDir, "checkout", w.job.SourceInfo.CommitSha)
+		if err := w.executeCommand(checkoutShaCmd); err != nil {
+			w.log("ERROR: failed to checkout commit %s: %v", w.job.SourceInfo.CommitSha, err)
+			return w.failJob("failed to checkout commit")
+		}
+	}
+
+	w.log("Repository cloned and checked out successfully.")
+
+	// Determine effective build context directory based on WorkingDir
+	buildContext := w.workDir
+	if w.job.SourceInfo.WorkingDir != "" {
+		buildContext = filepath.Join(w.workDir, w.job.SourceInfo.WorkingDir)
+		w.log("Using working directory: %s", w.job.SourceInfo.WorkingDir)
+	}
+
+	dockerfilePath := filepath.Join(buildContext, "Dockerfile")
 	if _, err := os.Stat(dockerfilePath); err == nil {
-		w.log("Dockerfile found, starting BuildKit build...")
+		w.log("Dockerfile found in context, starting BuildKit build...")
 
 		// Warn if PrebuildCommand is ignored
 		if w.job.BuildConfig.PrebuildCommand != "" {
@@ -101,8 +127,8 @@ func (w *Worker) Run() error {
 		w.log("Image tag: %s", imageTag)
 
 		opts := driver.BuildOpts{
-			ContextPath:   w.workDir,
-			Dockerfileath: w.workDir,
+			ContextPath:   buildContext,
+			Dockerfileath: buildContext,
 			ImageTag:      imageTag,
 		}
 		buildCmd := w.buildkit.BuildCommand(opts)
@@ -117,14 +143,14 @@ func (w *Worker) Run() error {
 			// Don't fail the build for this, just log it
 		}
 	} else {
-		w.log("No Dockerfile found, attempting to auto-detect and generate...")
+		w.log("No Dockerfile found in context, attempting to auto-detect and generate...")
 		if !w.job.BuildConfig.IsAutoBuild {
 			w.log("ERROR: Auto-build is not enabled for this job.")
 			return w.failJob("No build strategy found (e.g., Dockerfile missing and auto-build disabled)")
 		}
 
 		// Detect config and generate Dockerfile content
-		detectedConfig, err := autodetect.AutoDetectBuildConfig(w.workDir, w.allowlist)
+		detectedConfig, err := autodetect.AutoDetectBuildConfig(buildContext, w.allowlist)
 		if err != nil {
 			w.log("ERROR: failed to auto-detect build config: %v", err)
 			return w.failJob("failed to auto-detect build config")
@@ -146,8 +172,8 @@ func (w *Worker) Run() error {
 		w.log("Image tag: %s", imageTag)
 
 		opts := driver.BuildOpts{
-			ContextPath:   w.workDir,
-			Dockerfileath: w.workDir,
+			ContextPath:   buildContext,
+			Dockerfileath: buildContext,
 			ImageTag:      imageTag,
 		}
 		buildCmd := w.buildkit.BuildCommand(opts)

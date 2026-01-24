@@ -59,6 +59,7 @@ type SourceInfo struct {
 	GitRepository string `json:"gitRepository"`
 	CommitSha     string `json:"commitSha"`
 	Ref           string `json:"ref"`
+	WorkingDir    string `json:"workingDir"` // Subdirectory within the repo
 }
 
 func (a *SourceInfo) Value() (driver.Value, error) {
