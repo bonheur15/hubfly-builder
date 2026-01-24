@@ -79,10 +79,16 @@ func (s *Server) CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if job.SourceInfo.Ref != "" {
-			exec.Command("git", "-C", tempDir, "checkout", job.SourceInfo.Ref).Run()
+			if err := exec.Command("git", "-C", tempDir, "checkout", job.SourceInfo.Ref).Run(); err != nil {
+				http.Error(w, fmt.Sprintf("failed to checkout ref %s", job.SourceInfo.Ref), http.StatusBadRequest)
+				return
+			}
 		}
 		if job.SourceInfo.CommitSha != "" {
-			exec.Command("git", "-C", tempDir, "checkout", job.SourceInfo.CommitSha).Run()
+			if err := exec.Command("git", "-C", tempDir, "checkout", job.SourceInfo.CommitSha).Run(); err != nil {
+				http.Error(w, fmt.Sprintf("failed to checkout commit %s", job.SourceInfo.CommitSha), http.StatusBadRequest)
+				return
+			}
 		}
 
 		inspectDir := tempDir
