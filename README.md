@@ -1,149 +1,272 @@
-# hubfly builder
+# Hubfly Builder
 
-Standalone Go Builder for Hubfly.
+**Hubfly Builder** is a high-performance, standalone Go service designed to orchestrate container image builds using [BuildKit](https://github.com/moby/buildkit). It provides a robust API for managing build jobs, supports automatic runtime detection, implements a secure command allowlist, and ensures persistence through a local SQLite database.
 
-This service receives build jobs, executes them using BuildKit, streams logs, pushes images to a registry, and reports results back to a backend. It uses a local SQLite database for persistence, allowing it to resume jobs after a restart.
+## Architecture & Features
 
-## Features
+- **Built with Go:** High-performance, concurrent execution model.
+- **BuildKit Backend:** Leverages the advanced features of BuildKit for efficient and secure image building.
+- **SQLite Persistence:** All job metadata, status, and history are stored locally, allowing the builder to resume operations after restarts.
+- **Auto-Detection (Zero-Config):** Automatically detects the runtime (Node.js, Bun, Go, Python, etc.) and generates an optimized Dockerfile if one isn't provided.
+- **Secure by Design:** Commands are validated against a strict `allowed-commands.json` allowlist.
+- **Structured Logging:** Job logs are captured, stored locally, and served via API.
+- **Backend Integration:** Reports build outcomes (success/failure) via configurable webhooks.
+- **Resource Management:** Supports configurable per-job resource limits (CPU/Memory).
+- **Cleanup Automation:** Automatically prunes build workspaces and implements log retention policies.
 
-- **Concurrent Builds:** Manages a configurable number of concurrent build jobs.
-- **Persistent Job Queue:** Uses SQLite to persist the job queue, allowing for recovery after restarts.
-- **Git Integration:** Clones Git repositories to use as a build context.
-- **BuildKit Integration:** Uses `buildctl` to build Dockerfiles and push images to a registry.
-- **Command Allowlist:** Restricts executable commands to a safe list defined in `configs/allowed-commands.json`.
-- **Backend Reporting:** Reports build status (success or failure) back to a configurable webhook URL.
-- **System Logging:** Writes system-level logs (startup env, API payloads, callback payloads) to `./log/system-<timestamp>.log`, and cleans up old logs based on the retention policy.
-- **Automatic Cleanup:**
-  - Workspaces are automatically cleaned up after each build.
-  - Old log files are periodically deleted based on a retention policy.
-- **Retry Logic:** Automatically retries failed builds up to a configurable number of times.
-- **Automatic Dockerfile Generation:** If a repository does not contain a Dockerfile, the builder will automatically generate one based on the detected runtime. This allows projects without a Dockerfile to be built and pushed as Docker images.
+---
 
-### Supported Runtimes
-- Node.js
-- Python
-- Go
-- Bun
-- Static HTML
+## Configuration
+
+### Environment Variables & `configs/env.json`
+
+The builder can be configured via environment variables or a JSON configuration file located at `configs/env.json`. If the file is missing, a default one is generated on startup.
+
+| Key | Description | Default / Example |
+| :--- | :--- | :--- |
+| `BUILDKIT_ADDR` | Address of the BuildKit daemon | `unix:///run/buildkit/buildkitd.sock` |
+| `REGISTRY_URL` | Default registry to push images to | `localhost:5000` |
+| `CALLBACK_URL` | Backend webhook for reporting results | `https://api.hubfly.space/builds/callback` |
+| `PORT` | Port for the builder server to listen on | `8781` |
+
+### Command Allowlist (`configs/allowed-commands.json`)
+
+To prevent arbitrary command execution, only commands listed in this file are permitted for `prebuild`, `build`, and `run` stages.
+
+```json
+{
+  "prebuild": ["npm install", "bun install", "go mod download", "pip install -r requirements.txt"],
+  "build": ["npm run build", "bun run build", "go build ./..."],
+  "run": ["npm start", "bun run start", "python main.py"]
+}
+```
+
+---
+
+## Supported Runtimes & Auto-Detection
+
+When `isAutoBuild` is set to `true`, the builder inspects the repository root (or the specified `workingDir`) to identify the runtime:
+
+| Runtime | Detection File | Default Image |
+| :--- | :--- | :--- |
+| **Bun** | `bun.lock` | `oven/bun:1.2` |
+| **Node.js** | `package.json` | `node:18-alpine` |
+| **Go** | `go.mod` | `golang:1.18-alpine` |
+| **Python** | `requirements.txt` | `python:3.9-slim` |
+| **Static** | `index.html` | `nginx:alpine` |
+| **PHP** | `composer.json` | *Detected (Detection only)* |
+
+If a `Dockerfile` exists in the context, it takes precedence over auto-detection.
+
+---
+
+## Image Tagging Scheme
+
+Images are tagged according to the following pattern:
+`{REGISTRY}/{USER_ID}/{PROJECT_ID}:{SHORT_COMMIT_SHA}-b{BUILD_ID}-v{TIMESTAMP}`
+
+**Example:**
+`registry.hubfly.com/user-123/my-app:abc123456789-b-build-456-v20260210T123000Z`
+
+---
+
+## API Documentation
+
+### 1. Create Build Job
+Creates a new build job and queues it for execution.
+
+- **URL:** `/api/v1/jobs`
+- **Method:** `POST`
+- **Payload:**
+
+```json
+{
+  "id": "build_uuid_123",
+  "projectId": "my-awesome-project",
+  "userId": "user_99",
+  "sourceType": "git",
+  "sourceInfo": {
+    "gitRepository": "https://github.com/user/repo.git",
+    "ref": "main",
+    "commitSha": "optional_full_sha",
+    "workingDir": "src"
+  },
+  "buildConfig": {
+    "isAutoBuild": true,
+    "runtime": "bun",
+    "version": "1.2",
+    "prebuildCommand": "bun install",
+    "buildCommand": "bun run build",
+    "timeoutSeconds": 3600,
+    "resourceLimits": {
+      "cpu": 2,
+      "memoryMB": 2048
+    }
+  }
+}
+```
+
+- **Responses:**
+  - `201 Created`: Job successfully queued. The response body includes the fully populated `BuildConfig`, including the auto-generated `dockerfileContent` (if `isAutoBuild` was `true`).
+  - `400 Bad Request`: Invalid payload or failed repository inspection.
+  - `500 Internal Server Error`: Storage failure.
+
+- **Example:**
+```bash
+curl -X POST http://localhost:8781/api/v1/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"id":"b1", "projectId":"p1", "userId":"u1", "sourceType":"git", "sourceInfo":{"gitRepository":"https://github.com/bonheur15/hubfly-sample-react-bun.git"}, "buildConfig":{"isAutoBuild":true}}'
+```
+
+### 2. Get Job Status
+Retrieves the full metadata and current status of a job.
+
+- **URL:** `/api/v1/jobs/{id}`
+- **Method:** `GET`
+- **Responses:**
+  - `200 OK`: Returns the `BuildJob` object.
+  - `404 Not Found`: `{"error": "JOB_NOT_FOUND", "message": "job not found"}`
+
+- **Example:**
+```bash
+curl -i http://localhost:8781/api/v1/jobs/b1
+```
+
+### 3. Get Job Logs
+Returns the raw text logs of the build process.
+
+- **URL:** `/api/v1/jobs/{id}/logs`
+- **Method:** `GET`
+- **Responses:**
+  - `200 OK`: `text/plain` stream of logs.
+  - `404 Not Found`: `{"error": "BUILD_LOG_NOT_FOUND", "message": "build log not found"}`
+
+- **Example:**
+```bash
+curl http://localhost:8781/api/v1/jobs/b1/logs
+```
+
+### 4. Health Check
+Basic availability check.
+
+- **URL:** `/healthz`
+- **Method:** `GET`
+- **Response:** `200 OK` ("OK")
+
+---
+
+## Development & Debugging Endpoints
+
+### List Running Builds
+Lists all jobs currently in `claimed` or `building` state.
+
+- **URL:** `/dev/running-builds`
+- **Method:** `GET`
+
+### Reset Database
+Clears all jobs from the SQLite database. **Use with caution.**
+
+- **URL:** `/dev/reset-db`
+- **Method:** `POST`
+
+---
+
+## Errors and Status Codes
+
+| Code | Status | Meaning |
+| :--- | :--- | :--- |
+| `pending` | 201 | Job created, waiting for worker. |
+| `claimed` | - | Job picked up by a worker. |
+| `building` | - | BuildKit or Git operations in progress. |
+| `success` | - | Build and push completed successfully. |
+| `failed` | - | An error occurred during the build process. |
+| `canceled` | - | Job was manually terminated. |
+
+---
 
 ## Getting Started
 
 ### Prerequisites
+- **Go 1.18+**
+- **BuildKit:** Ensure `buildkitd` is running.
+- **Git:** Installed and available in PATH.
 
-- Go 1.18+
-- BuildKit (`buildkitd` running and `buildctl` in the system's PATH)
-- A running container registry (if pushing images)
+### Installation
+```bash
+git clone https://github.com/hubfly/hubfly-builder.git
+cd hubfly-builder
+go mod download
+```
 
-### Running the Builder
+### Running the Server
+```bash
+go run cmd/hubfly-builder/main.go
+```
 
-1.  **Start BuildKit (if not already running):**
-    ```bash
-    # Example using Docker
-    docker run -d --name buildkitd --privileged moby/buildkit:latest
-    export BUILDKIT_ADDR=docker-container://buildkitd
-    export BUILDKIT_HOST=docker-container://buildkitd
-    ```
+The server will start on port `8781` by default.
 
-2.  **Run the builder service:**
-    The service can be configured via environment variables or a `configs/env.json` file.
 
-    **Configuration via `configs/env.json`:**
-    If `configs/env.json` does not exist, the builder will create a default one on startup:
-    ```json
-    {
-      "BUILDKIT_ADDR": "docker-container://buildkitd",
-      "BUILDKIT_HOST": "docker-container://buildkitd",
-      "REGISTRY_URL": "100.117.248.57:5000",
-      "CALLBACK_URL": "https://hubfly.space/api/builds/callback"
-    }
-    ```
-    Values provided in `configs/env.json` will be set as environment variables.
 
-    **Example startup:**
-    ```bash
-    go run ./cmd/hubfly-builder/main.go
-    ```
+---
 
-## Endpoints
 
-All endpoints are served on port `:8781`.
 
-### Health Check
+## Utility Commands
 
-- **Endpoint:** `GET /healthz`
-- **Description:** Returns a 200 OK status if the service is running.
-- **Example:**
-  ```bash
-  curl -i -X GET http://localhost:8781/healthz
-  ```
 
-### Create a Build Job
 
-- **Endpoint:** `POST /api/v1/jobs`
-- **Description:** Creates a new build job. The job is added to the queue and will be picked up by the executor.
-- **Example:**
-  ```bash
-  curl -X POST http://localhost:8781/api/v1/jobs -H "Content-Type: application/json" -d '{
-    "id": "build_26",
-    "projectId": "my-project",
-    "userId": "user_123",
-    "sourceType": "git",
-    "sourceInfo": {
-      "gitRepository": "https://github.com/bonheur15/hubfly-sample-react-bun.git",
-      "commitSha": "",
-      "ref": "main"
-    },
-    "buildConfig": {
-      "isAutoBuild": true,
-      "runtime": "bun",
-      "version": "1",
-      "prebuildCommand": "",
-      "buildCommand": "",
-      "runCommand": "",
-      "timeoutSeconds": 1800,
-      "resourceLimits": {
-        "cpu": 1,
-        "memoryMB": 1024
-      }
-    }
-  }'
-  ```
+### Checking Local Registry
 
-### Get Job Status
+If you are running a local registry, you can list repositories and tags using:
 
-- **Endpoint:** `GET /api/v1/jobs/{id}`
-- **Description:** Retrieves the status and details of a specific build job.
-- **Example:**
-  ```bash
-  curl -X GET http://localhost:8080/api/v1/jobs/build_26
-  ```
 
-### Get Job Logs
 
-- **Endpoint:** `GET /api/v1/jobs/{id}/logs`
-- **Description:** Retrieves the logs for a specific build job.
-- **Errors:**
-  - `JOB_NOT_FOUND` (404) if the job does not exist.
-  - `BUILD_LOG_NOT_FOUND` (404) if the job exists but its log file is missing or not yet available.
-- **Example:**
-  ```bash
-  curl -X GET http://100.117.248.57:8781/api/v1/jobs/build_50f3357d-e64a-4850-a761-30d6f140c665/logs
-  ```
+```bash
 
-### List Running Builds (Dev Endpoint)
+# List all repositories
 
-- **Endpoint:** `GET /dev/running-builds`
-- **Description:** A development-only endpoint that returns a list of jobs currently in the 'claimed' or 'building' state.
-- **Example:**
-  ```bash
-  curl -X GET http://100.117.248.57:8781/dev/running-builds
-  ```
+curl -s http://localhost:5000/v2/_catalog | jq
 
-### Reset Database (Dev Endpoint)
 
-- **Endpoint:** `POST /dev/reset-db`
-- **Description:** A development-only endpoint that deletes all build jobs from the database.
-- **Example:**
-  ```bash
-  curl -X POST http://localhost:8781/dev/reset-db
-  ```
+
+# List tags for a specific image
+
+curl -s http://localhost:5000/v2/user-123/my-awesome-project/tags/list | jq
+
+```
+
+
+
+### Inspecting BuildKit
+
+To see the current BuildKit status:
+
+
+
+```bash
+
+buildctl --addr unix:///run/buildkit/buildkitd.sock debug workers
+
+```
+
+
+
+### Manual Build Test
+
+To test a build manually using `buildctl`:
+
+
+
+```bash
+
+buildctl build \
+
+  --frontend=dockerfile.v0 \
+
+  --local context=. \
+
+  --local dockerfile=. \
+
+  --output type=image,name=localhost:5000/test-image:latest,push=true
+
+```
