@@ -33,6 +33,9 @@ func DetectRuntime(repoPath string) (string, string) {
 	if fileExists(filepath.Join(repoPath, "composer.json")) {
 		return "php", "8"
 	}
+	if fileExists(filepath.Join(repoPath, "pom.xml")) || fileExists(filepath.Join(repoPath, "build.gradle")) || fileExists(filepath.Join(repoPath, "build.gradle.kts")) {
+		return "java", "17"
+	}
 	if fileExists(filepath.Join(repoPath, "index.html")) {
 		return "static", "latest"
 	}
@@ -40,6 +43,10 @@ func DetectRuntime(repoPath string) (string, string) {
 }
 
 func DetectCommands(runtime string, allowed *allowlist.AllowedCommands) (string, string, string) {
+	return detectCommandsWithPath("", runtime, allowed)
+}
+
+func detectCommandsWithPath(repoPath string, runtime string, allowed *allowlist.AllowedCommands) (string, string, string) {
 	switch runtime {
 	case "static":
 		return "", "", ""
@@ -59,8 +66,25 @@ func DetectCommands(runtime string, allowed *allowlist.AllowedCommands) (string,
 		return pickAllowed("go mod download", allowed.Prebuild),
 			pickAllowed("go build ./...", allowed.Build),
 			pickAllowed("go run main.go", allowed.Run)
+	case "java":
+		return detectJavaCommands(repoPath, allowed)
 	}
 	return "", "", ""
+}
+
+func detectJavaCommands(repoPath string, allowed *allowlist.AllowedCommands) (string, string, string) {
+	isMaven := repoPath == "" || fileExists(filepath.Join(repoPath, "pom.xml"))
+	isGradle := repoPath != "" && (fileExists(filepath.Join(repoPath, "build.gradle")) || fileExists(filepath.Join(repoPath, "build.gradle.kts")))
+	
+	if isGradle {
+		return pickAllowed("gradle dependencies", allowed.Prebuild),
+			pickAllowed("gradle build -x test", allowed.Build),
+			pickAllowed("java -jar build/libs/*.jar", allowed.Run)
+	}
+	
+	return pickAllowed("mvn clean", allowed.Prebuild),
+		pickAllowed("mvn install -DskipTests", allowed.Build),
+		pickAllowed("java -jar target/*.jar", allowed.Run)
 }
 
 func pickAllowed(preferred string, allowed []string) string {
@@ -75,7 +99,7 @@ func pickAllowed(preferred string, allowed []string) string {
 
 func AutoDetectBuildConfig(repoPath string, allowed *allowlist.AllowedCommands) (BuildConfig, error) {
 	runtime, version := DetectRuntime(repoPath)
-	prebuild, build, run := DetectCommands(runtime, allowed)
+	prebuild, build, run := detectCommandsWithPath(repoPath, runtime, allowed)
 
 	dockerfileContent, err := GenerateDockerfile(runtime, version, prebuild, build, run)
 	if err != nil {
