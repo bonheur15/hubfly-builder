@@ -97,6 +97,11 @@ Creates a new build job and queues it for execution.
     "version": "1.2",
     "prebuildCommand": "bun install",
     "buildCommand": "bun run build",
+    "env": {
+      "NEXT_PUBLIC_API_URL": "https://api.example.com",
+      "DATABASE_URL": "postgres://...",
+      "SENTRY_AUTH_TOKEN": "..."
+    },
     "timeoutSeconds": 3600,
     "resourceLimits": {
       "cpu": 2,
@@ -105,6 +110,13 @@ Creates a new build job and queues it for execution.
   }
 }
 ```
+
+`buildConfig.env` is always treated in `auto` mode:
+- Public-prefixed vars (e.g. `NEXT_PUBLIC_`, `VITE_`) are resolved as `both` (build + runtime).
+- Keys with build evidence (`Dockerfile ARG`/reference or known build config references) are resolved to `build`.
+- Unknown keys default to `runtime`.
+- Unknown/sensitive keys default to `secret` and are mounted as BuildKit secrets for build-time usage.
+- The resolved result is returned as `buildConfig.resolvedEnvPlan` and callback metadata (`runtimeEnvKeys`).
 
 - **Responses:**
   - `201 Created`: Job successfully queued. The response body includes the fully populated `BuildConfig`, including the auto-generated `dockerfileContent` (if `isAutoBuild` was `true`).

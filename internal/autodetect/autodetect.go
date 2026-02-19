@@ -22,7 +22,7 @@ func DetectRuntime(repoPath string) (string, string) {
 		return "bun", "1.2" // Simplified version detection
 	}
 	if fileExists(filepath.Join(repoPath, "package.json")) {
-		return "node", "18" // Simplified version detection
+		return "node", "22" // Simplified version detection
 	}
 	if fileExists(filepath.Join(repoPath, "requirements.txt")) {
 		return "python", "3.9" // Simplified version detection
@@ -73,15 +73,15 @@ func detectCommandsWithPath(repoPath string, runtime string, allowed *allowlist.
 }
 
 func detectJavaCommands(repoPath string, allowed *allowlist.AllowedCommands) (string, string, string) {
-	isMaven := repoPath == "" || fileExists(filepath.Join(repoPath, "pom.xml"))
+	// isMaven := repoPath == "" || fileExists(filepath.Join(repoPath, "pom.xml"))
 	isGradle := repoPath != "" && (fileExists(filepath.Join(repoPath, "build.gradle")) || fileExists(filepath.Join(repoPath, "build.gradle.kts")))
-	
+
 	if isGradle {
 		return pickAllowed("gradle dependencies", allowed.Prebuild),
 			pickAllowed("gradle build -x test", allowed.Build),
 			pickAllowed("java -jar build/libs/*.jar", allowed.Run)
 	}
-	
+
 	return pickAllowed("mvn clean", allowed.Prebuild),
 		pickAllowed("mvn install -DskipTests", allowed.Build),
 		pickAllowed("java -jar target/*.jar", allowed.Run)

@@ -1,18 +1,27 @@
 package autodetect
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
 
-// GenerateDockerfile creates a Dockerfile content based on the runtime and version.
+// GenerateDockerfile creates Dockerfile content based on the runtime and version.
 func GenerateDockerfile(runtime, version, prebuildCommand, buildCommand, runCommand string) ([]byte, error) {
+	return GenerateDockerfileWithBuildEnv(runtime, version, prebuildCommand, buildCommand, runCommand, nil, nil)
+}
+
+// GenerateDockerfileWithBuildEnv creates Dockerfile content and wires build-time env support.
+func GenerateDockerfileWithBuildEnv(runtime, version, prebuildCommand, buildCommand, runCommand string, buildArgKeys, secretBuildKeys []string) ([]byte, error) {
 	switch runtime {
 	case "node":
-		return generateNodeDockerfile(version, prebuildCommand, buildCommand, runCommand), nil
+		return generateAppDockerfile("node:"+version+"-alpine", "/app", "3000", prebuildCommand, buildCommand, runCommand, buildArgKeys, secretBuildKeys), nil
 	case "python":
-		return generatePythonDockerfile(version, prebuildCommand, buildCommand, runCommand), nil
+		return generateAppDockerfile("python:"+version+"-slim", "/app", "8000", prebuildCommand, buildCommand, runCommand, buildArgKeys, secretBuildKeys), nil
 	case "go":
-		return generateGoDockerfile(version, prebuildCommand, buildCommand, runCommand), nil
+		return generateAppDockerfile("golang:"+version+"-alpine", "/app", "8080", prebuildCommand, buildCommand, runCommand, buildArgKeys, secretBuildKeys), nil
 	case "bun":
-		return generateBunDockerfile(version, prebuildCommand, buildCommand, runCommand), nil
+		return generateAppDockerfile("oven/bun:"+version, "/app", "3000", prebuildCommand, buildCommand, runCommand, buildArgKeys, secretBuildKeys), nil
 	case "static":
 		return generateStaticDockerfile(), nil
 	default:
@@ -21,8 +30,7 @@ func GenerateDockerfile(runtime, version, prebuildCommand, buildCommand, runComm
 }
 
 func generateStaticDockerfile() []byte {
-	return []byte(`
-FROM nginx:alpine
+	return []byte(`FROM nginx:alpine
 
 WORKDIR /usr/share/nginx/html
 
@@ -34,70 +42,97 @@ CMD ["nginx", "-g", "daemon off;"]
 `)
 }
 
-func generateBunDockerfile(version, prebuildCommand, buildCommand, runCommand string) []byte {
-	return []byte(fmt.Sprintf(`
-FROM oven/bun:%s
+func generateAppDockerfile(baseImage, workDir, exposePort, prebuildCommand, buildCommand, runCommand string, buildArgKeys, secretBuildKeys []string) []byte {
+	buildArgKeys = normalizeKeys(buildArgKeys)
+	secretBuildKeys = normalizeKeys(secretBuildKeys)
 
-WORKDIR /app
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "FROM %s\n\n", baseImage)
+	fmt.Fprintf(&builder, "WORKDIR %s\n\n", workDir)
+	builder.WriteString("COPY . .\n\n")
 
-COPY . .
+	if argLines := renderArgLines(buildArgKeys); argLines != "" {
+		builder.WriteString(argLines)
+	}
+	if runLine := renderRunLine(prebuildCommand, secretBuildKeys); runLine != "" {
+		builder.WriteString(runLine)
+	}
+	if runLine := renderRunLine(buildCommand, secretBuildKeys); runLine != "" {
+		builder.WriteString(runLine)
+	}
 
-RUN %s
-RUN %s
+	fmt.Fprintf(&builder, "\nEXPOSE %s\n\n", exposePort)
+	if cmdLine := renderCmdLine(runCommand); cmdLine != "" {
+		builder.WriteString(cmdLine)
+	}
 
-EXPOSE 3000
-
-CMD %s
-`, version, prebuildCommand, buildCommand, runCommand))
+	return []byte(strings.TrimSpace(builder.String()) + "\n")
 }
 
-func generateNodeDockerfile(version, prebuildCommand, buildCommand, runCommand string) []byte {
-	return []byte(fmt.Sprintf(`
-FROM node:%s-alpine
-
-WORKDIR /app
-
-COPY . .
-
-RUN %s
-RUN %s
-
-EXPOSE 3000
-
-CMD %s
-`, version, prebuildCommand, buildCommand, runCommand))
+func renderArgLines(keys []string) string {
+	if len(keys) == 0 {
+		return ""
+	}
+	var builder strings.Builder
+	for _, key := range keys {
+		fmt.Fprintf(&builder, "ARG %s\n", key)
+	}
+	builder.WriteString("\n")
+	return builder.String()
 }
 
-func generatePythonDockerfile(version, prebuildCommand, buildCommand, runCommand string) []byte {
-	return []byte(fmt.Sprintf(`
-FROM python:%s-slim
+func renderRunLine(command string, secretBuildKeys []string) string {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return ""
+	}
 
-WORKDIR /app
+	if len(secretBuildKeys) == 0 {
+		return fmt.Sprintf("RUN %s\n", command)
+	}
 
-COPY . .
+	mountFlags := make([]string, 0, len(secretBuildKeys))
+	exports := make([]string, 0, len(secretBuildKeys))
+	for _, key := range secretBuildKeys {
+		mountFlags = append(mountFlags, fmt.Sprintf("--mount=type=secret,id=%s", key))
+		exports = append(exports, fmt.Sprintf("export %s=\"$(cat /run/secrets/%s)\";", key, key))
+	}
 
-RUN %s
-RUN %s
-
-EXPOSE 8000
-
-CMD %s
-`, version, prebuildCommand, buildCommand, runCommand))
+	payload := "set -e; " + strings.Join(exports, " ") + " " + command
+	return fmt.Sprintf("RUN %s sh -c '%s'\n", strings.Join(mountFlags, " "), escapeSingleQuotes(payload))
 }
 
-func generateGoDockerfile(version, prebuildCommand, buildCommand, runCommand string) []byte {
-	return []byte(fmt.Sprintf(`
-FROM golang:%s-alpine
+func renderCmdLine(command string) string {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return ""
+	}
+	return fmt.Sprintf("CMD %s\n", command)
+}
 
-WORKDIR /app
+func escapeSingleQuotes(value string) string {
+	return strings.ReplaceAll(value, "'", "'\"'\"'")
+}
 
-COPY . .
+func normalizeKeys(keys []string) []string {
+	if len(keys) == 0 {
+		return nil
+	}
 
-RUN %s
-RUN %s
+	seen := make(map[string]struct{}, len(keys))
+	out := make([]string, 0, len(keys))
+	for _, key := range keys {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, key)
+	}
 
-EXPOSE 8080
-
-CMD %s
-`, version, prebuildCommand, buildCommand, runCommand))
+	sort.Strings(out)
+	return out
 }

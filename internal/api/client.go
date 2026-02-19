@@ -8,6 +8,7 @@ import (
 	"math"
 	"math/rand"
 	"net/http"
+	"sort"
 	"time"
 
 	"hubfly-builder/internal/storage"
@@ -38,6 +39,8 @@ type ReportPayload struct {
 	DurationSeconds float64   `json:"durationSeconds"`
 	LogPath         string    `json:"logPath"`
 	Error           string    `json:"error,omitempty"`
+	ResolvedEnvPlan []storage.ResolvedEnvVar `json:"resolvedEnvPlan,omitempty"`
+	RuntimeEnvKeys  []string                 `json:"runtimeEnvKeys,omitempty"`
 }
 
 func (c *Client) ReportResult(job *storage.BuildJob, status, errorMsg string) error {
@@ -53,6 +56,8 @@ func (c *Client) ReportResult(job *storage.BuildJob, status, errorMsg string) er
 		ImageTag:  job.ImageTag,
 		LogPath:   job.LogPath,
 		Error:     errorMsg,
+		ResolvedEnvPlan: job.BuildConfig.ResolvedEnvPlan,
+		RuntimeEnvKeys:  runtimeEnvKeys(job.BuildConfig.ResolvedEnvPlan),
 	}
 	if !job.StartedAt.Time.IsZero() {
 		payload.StartedAt = job.StartedAt.Time
@@ -106,4 +111,15 @@ func (c *Client) ReportResult(job *storage.BuildJob, status, errorMsg string) er
 	}
 
 	return fmt.Errorf("failed to report result after %d attempts: %w", maxRetries, lastErr)
+}
+
+func runtimeEnvKeys(plan []storage.ResolvedEnvVar) []string {
+	keys := make([]string, 0)
+	for _, entry := range plan {
+		if entry.Scope == "runtime" || entry.Scope == "both" {
+			keys = append(keys, entry.Key)
+		}
+	}
+	sort.Strings(keys)
+	return keys
 }
