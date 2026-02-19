@@ -60,6 +60,9 @@ func (s *Server) CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if len(job.BuildConfig.Env) == 0 && len(job.Env) > 0 {
+		job.BuildConfig.Env = copyStringMap(job.Env)
+	}
 
 	if job.BuildConfig.IsAutoBuild {
 		// For auto-build, we need to clone the repo first to inspect it.
@@ -110,6 +113,8 @@ func (s *Server) CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 			RunCommand:        detectedConfig.RunCommand,
 			TimeoutSeconds:    job.BuildConfig.TimeoutSeconds,   // Keep original timeout
 			ResourceLimits:    job.BuildConfig.ResourceLimits,   // Keep original resource limits
+			Env:               job.BuildConfig.Env,              // Keep incoming env vars.
+			ResolvedEnvPlan:   job.BuildConfig.ResolvedEnvPlan,  // Keep any pre-resolved metadata.
 			DockerfileContent: detectedConfig.DockerfileContent,
 		}
 	}
@@ -229,4 +234,16 @@ func (s *Server) ResetDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 func HealthCheckHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintln(w, "OK")
+}
+
+func copyStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+
+	copied := make(map[string]string, len(values))
+	for key, value := range values {
+		copied[key] = value
+	}
+	return copied
 }

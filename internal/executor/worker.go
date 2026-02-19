@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"hubfly-builder/internal/api"
 	"hubfly-builder/internal/autodetect"
 	"hubfly-builder/internal/driver"
+	"hubfly-builder/internal/envplan"
 	"hubfly-builder/internal/logs"
 	"hubfly-builder/internal/storage"
 )
@@ -107,18 +109,38 @@ func (w *Worker) Run() error {
 
 	w.log("Repository cloned and checked out successfully.")
 
-	// Determine effective build context directory based on WorkingDir
+	// Determine effective build context directory based on WorkingDir.
 	buildContext := w.workDir
 	if w.job.SourceInfo.WorkingDir != "" {
 		buildContext = filepath.Join(w.workDir, w.job.SourceInfo.WorkingDir)
 		w.log("Using working directory: %s", w.job.SourceInfo.WorkingDir)
 	}
 
+	if len(w.job.BuildConfig.Env) == 0 && len(w.job.Env) > 0 {
+		w.job.BuildConfig.Env = copyStringMap(w.job.Env)
+	}
+
+	envResult := envplan.Resolve(buildContext, w.job.BuildConfig.Env)
+	w.job.BuildConfig.ResolvedEnvPlan = envResult.Entries
+	w.logResolvedEnvPlan(envResult.Entries)
+	if len(w.job.BuildConfig.Env) > 0 {
+		if err := w.storage.UpdateJobBuildConfig(w.job.ID, &w.job.BuildConfig); err != nil {
+			w.log("WARNING: could not persist resolved env plan: %v", err)
+		}
+	}
+
+	buildSecrets, cleanupSecrets, err := w.prepareBuildSecrets(envResult.BuildSecrets)
+	if err != nil {
+		w.log("ERROR: could not prepare build secrets: %v", err)
+		return w.failJob("failed to prepare build secrets")
+	}
+	defer cleanupSecrets()
+
 	dockerfilePath := filepath.Join(buildContext, "Dockerfile")
 	if _, err := os.Stat(dockerfilePath); err == nil {
 		w.log("Dockerfile found in context, starting BuildKit build...")
 
-		// Warn if PrebuildCommand is ignored
+		// Warn if PrebuildCommand is ignored.
 		if w.job.BuildConfig.PrebuildCommand != "" {
 			w.log("WARNING: PrebuildCommand '%s' is ignored because a Dockerfile was provided. Please include pre-build steps in your Dockerfile.", w.job.BuildConfig.PrebuildCommand)
 		}
@@ -127,9 +149,11 @@ func (w *Worker) Run() error {
 		w.log("Image tag: %s", imageTag)
 
 		opts := driver.BuildOpts{
-			ContextPath:   buildContext,
-			Dockerfileath: buildContext,
-			ImageTag:      imageTag,
+			ContextPath:    buildContext,
+			DockerfilePath: buildContext,
+			ImageTag:       imageTag,
+			BuildArgs:      envResult.BuildArgs,
+			Secrets:        buildSecrets,
 		}
 		buildCmd := w.buildkit.BuildCommand(opts)
 		if err := w.executeCommand(buildCmd); err != nil {
@@ -140,7 +164,7 @@ func (w *Worker) Run() error {
 		w.job.ImageTag = imageTag
 		if err := w.storage.UpdateJobImageTag(w.job.ID, imageTag); err != nil {
 			w.log("ERROR: could not update image tag: %v", err)
-			// Don't fail the build for this, just log it
+			// Don't fail the build for this, just log it.
 		}
 	} else {
 		w.log("No Dockerfile found in context, attempting to auto-detect and generate...")
@@ -149,7 +173,7 @@ func (w *Worker) Run() error {
 			return w.failJob("No build strategy found (e.g., Dockerfile missing and auto-build disabled)")
 		}
 
-		// Detect config and generate Dockerfile content
+		// Detect config and generate Dockerfile content.
 		detectedConfig, err := autodetect.AutoDetectBuildConfig(buildContext, w.allowlist)
 		if err != nil {
 			w.log("ERROR: failed to auto-detect build config: %v", err)
@@ -161,8 +185,32 @@ func (w *Worker) Run() error {
 			w.log("Auto-detected pre-build command: %s", detectedConfig.PrebuildCommand)
 		}
 
-		// Write the generated Dockerfile
-		if err := os.WriteFile(dockerfilePath, detectedConfig.DockerfileContent, 0644); err != nil {
+		dockerfileContent, err := autodetect.GenerateDockerfileWithBuildEnv(
+			detectedConfig.Runtime,
+			detectedConfig.Version,
+			detectedConfig.PrebuildCommand,
+			detectedConfig.BuildCommand,
+			detectedConfig.RunCommand,
+			envResult.BuildArgKeys(),
+			envResult.BuildSecretKeys(),
+		)
+		if err != nil {
+			w.log("ERROR: failed to generate Dockerfile with env support: %v", err)
+			return w.failJob("failed to generate Dockerfile")
+		}
+
+		w.job.BuildConfig.Runtime = detectedConfig.Runtime
+		w.job.BuildConfig.Version = detectedConfig.Version
+		w.job.BuildConfig.PrebuildCommand = detectedConfig.PrebuildCommand
+		w.job.BuildConfig.BuildCommand = detectedConfig.BuildCommand
+		w.job.BuildConfig.RunCommand = detectedConfig.RunCommand
+		w.job.BuildConfig.DockerfileContent = dockerfileContent
+		if err := w.storage.UpdateJobBuildConfig(w.job.ID, &w.job.BuildConfig); err != nil {
+			w.log("WARNING: could not persist generated Dockerfile metadata: %v", err)
+		}
+
+		// Write the generated Dockerfile.
+		if err := os.WriteFile(dockerfilePath, dockerfileContent, 0644); err != nil {
 			w.log("ERROR: failed to write generated Dockerfile: %v", err)
 			return w.failJob("failed to write generated Dockerfile")
 		}
@@ -172,9 +220,11 @@ func (w *Worker) Run() error {
 		w.log("Image tag: %s", imageTag)
 
 		opts := driver.BuildOpts{
-			ContextPath:   buildContext,
-			Dockerfileath: buildContext,
-			ImageTag:      imageTag,
+			ContextPath:    buildContext,
+			DockerfilePath: buildContext,
+			ImageTag:       imageTag,
+			BuildArgs:      envResult.BuildArgs,
+			Secrets:        buildSecrets,
 		}
 		buildCmd := w.buildkit.BuildCommand(opts)
 		if err := w.executeCommand(buildCmd); err != nil {
@@ -244,7 +294,7 @@ func (w *Worker) executeCommand(cmd *exec.Cmd) error {
 		w.streamPipe(stderr)
 	}()
 
-	w.log("Executing: %s", cmd.String())
+	w.log("Executing: %s", sanitizeCommandForLog(cmd))
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -270,6 +320,113 @@ func (w *Worker) generateImageTag() string {
 	sanitizedUserID := sanitize(w.job.UserID)
 	sanitizedProjectID := sanitize(w.job.ProjectID)
 	return fmt.Sprintf("%s/%s/%s:%s-b%s-v%s", w.registry, sanitizedUserID, sanitizedProjectID, shortSha, w.job.ID, ts)
+}
+
+func (w *Worker) logResolvedEnvPlan(entries []storage.ResolvedEnvVar) {
+	if len(entries) == 0 {
+		w.log("Env auto-resolution: no env variables provided")
+		return
+	}
+
+	for _, entry := range entries {
+		w.log("Env auto-resolution: key=%s scope=%s secret=%t reason=%s", entry.Key, entry.Scope, entry.Secret, entry.Reason)
+	}
+}
+
+func (w *Worker) prepareBuildSecrets(secretValues map[string]string) ([]driver.BuildSecret, func(), error) {
+	if len(secretValues) == 0 {
+		return nil, func() {}, nil
+	}
+
+	secretDir, err := os.MkdirTemp("", fmt.Sprintf("hubfly-builder-secrets-%s-", w.job.ID))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	keys := make([]string, 0, len(secretValues))
+	for key := range secretValues {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	secrets := make([]driver.BuildSecret, 0, len(keys))
+	for idx, key := range keys {
+		secretPath := filepath.Join(secretDir, fmt.Sprintf("%03d_%s", idx, sanitizeSecretFilename(key)))
+		if err := os.WriteFile(secretPath, []byte(secretValues[key]), 0600); err != nil {
+			_ = os.RemoveAll(secretDir)
+			return nil, nil, err
+		}
+		secrets = append(secrets, driver.BuildSecret{ID: key, Src: secretPath})
+	}
+
+	cleanup := func() {
+		_ = os.RemoveAll(secretDir)
+	}
+
+	return secrets, cleanup, nil
+}
+
+func sanitizeCommandForLog(cmd *exec.Cmd) string {
+	if len(cmd.Args) == 0 {
+		return cmd.String()
+	}
+
+	sanitized := make([]string, 0, len(cmd.Args))
+	for _, arg := range cmd.Args {
+		sanitized = append(sanitized, redactBuildArg(arg))
+	}
+	return strings.Join(sanitized, " ")
+}
+
+func redactBuildArg(arg string) string {
+	idx := strings.Index(arg, "build-arg:")
+	if idx == -1 {
+		return arg
+	}
+
+	start := idx + len("build-arg:")
+	eq := strings.Index(arg[start:], "=")
+	if eq == -1 {
+		return arg
+	}
+
+	eq += start
+	return arg[:eq+1] + "<redacted>"
+}
+
+func sanitizeSecretFilename(value string) string {
+	var builder strings.Builder
+	for _, ch := range value {
+		switch {
+		case ch >= 'a' && ch <= 'z':
+			builder.WriteRune(ch)
+		case ch >= 'A' && ch <= 'Z':
+			builder.WriteRune(ch)
+		case ch >= '0' && ch <= '9':
+			builder.WriteRune(ch)
+		case ch == '-', ch == '_', ch == '.':
+			builder.WriteRune(ch)
+		default:
+			builder.WriteByte('_')
+		}
+	}
+
+	if builder.Len() == 0 {
+		return "secret"
+	}
+	return builder.String()
+}
+
+func copyStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+
+	copied := make(map[string]string, len(values))
+	for key, value := range values {
+		copied[key] = value
+	}
+	return copied
 }
 
 func sanitize(s string) string {
