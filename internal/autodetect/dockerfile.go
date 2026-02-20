@@ -22,10 +22,29 @@ func GenerateDockerfileWithBuildEnv(runtime, version, prebuildCommand, buildComm
 		return generateAppDockerfile("golang:"+version+"-alpine", "/app", "8080", prebuildCommand, buildCommand, runCommand, buildArgKeys, secretBuildKeys), nil
 	case "bun":
 		return generateAppDockerfile("oven/bun:"+version, "/app", "3000", prebuildCommand, buildCommand, runCommand, buildArgKeys, secretBuildKeys), nil
+	case "java":
+		return generateAppDockerfile(selectJavaBaseImage(version, prebuildCommand, buildCommand), "/app", "8080", prebuildCommand, buildCommand, runCommand, buildArgKeys, secretBuildKeys), nil
 	case "static":
 		return generateStaticDockerfile(), nil
 	default:
 		return nil, fmt.Errorf("unsupported runtime: %s", runtime)
+	}
+}
+
+func selectJavaBaseImage(version, prebuildCommand, buildCommand string) string {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		version = "17"
+	}
+
+	combined := strings.ToLower(strings.TrimSpace(prebuildCommand + " " + buildCommand))
+	switch {
+	case strings.Contains(combined, "gradle"), strings.Contains(combined, "./gradlew"):
+		return "gradle:8-jdk" + version
+	case strings.Contains(combined, "mvn"), strings.Contains(combined, "./mvnw"):
+		return "maven:3.9-eclipse-temurin-" + version
+	default:
+		return "eclipse-temurin:" + version + "-jdk"
 	}
 }
 

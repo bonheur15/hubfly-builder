@@ -7,7 +7,7 @@
 - **Built with Go:** High-performance, concurrent execution model.
 - **BuildKit Backend:** Leverages the advanced features of BuildKit for efficient and secure image building.
 - **SQLite Persistence:** All job metadata, status, and history are stored locally, allowing the builder to resume operations after restarts.
-- **Auto-Detection (Zero-Config):** Automatically detects the runtime (Node.js, Bun, Go, Python, etc.) and generates an optimized Dockerfile if one isn't provided.
+- **Auto-Detection (Zero-Config):** Automatically detects the runtime (Node.js, Bun, Go, Python, Java, etc.) and generates an optimized Dockerfile if one isn't provided.
 - **Secure by Design:** Commands are validated against a strict `allowed-commands.json` allowlist.
 - **Structured Logging:** Job logs are captured, stored locally, and served via API.
 - **Backend Integration:** Reports build outcomes (success/failure) via configurable webhooks.
@@ -35,9 +35,9 @@ To prevent arbitrary command execution, only commands listed in this file are pe
 
 ```json
 {
-  "prebuild": ["npm install", "bun install", "go mod download", "pip install -r requirements.txt"],
-  "build": ["npm run build", "bun run build", "go build ./..."],
-  "run": ["npm start", "bun run start", "python main.py"]
+  "prebuild": ["npm install", "npm ci", "yarn install", "pnpm install", "bun install", "go work sync", "go mod download", "pip install -r requirements.txt", "pip install pipenv && pipenv install --system --deploy", "pip install .", "mvn clean", "gradle dependencies"],
+  "build": ["npm run build", "npm run build:*", "yarn build", "yarn run build:*", "pnpm run build", "pnpm run build:*", "go build -o app .", "go build -o app ./cmd/*", "go build -o app ./*", "go build ./...", "bun run build", "mvn install -DskipTests", "gradle build -x test"],
+  "run": ["npm start", "npm run *", "yarn start", "yarn run *", "pnpm start", "pnpm run *", "bun run start", "./app", "go run .", "go run ./cmd/*", "go run ./*", "python *.py", "python -m *", "python manage.py runserver 0.0.0.0:${PORT:-8000}", "uvicorn *:* --host 0.0.0.0 --port ${PORT:-8000}", "gunicorn *:* --bind 0.0.0.0:${PORT:-8000}", "java -jar target/*.jar", "java -jar build/libs/*.jar"]
 }
 ```
 
@@ -52,7 +52,8 @@ When `isAutoBuild` is set to `true`, the builder inspects the repository root (o
 | **Bun** | `bun.lock` | `oven/bun:1.2` |
 | **Node.js** | `package.json` | `node:18-alpine` |
 | **Go** | `go.mod` | `golang:1.18-alpine` |
-| **Python** | `requirements.txt` | `python:3.9-slim` |
+| **Python** | `requirements.txt`, `pyproject.toml`, `setup.py`, `Pipfile` | `python:3.9-slim` |
+| **Java** | `pom.xml`, `build.gradle`, `build.gradle.kts` | `maven:3.9-eclipse-temurin-17` / `gradle:8-jdk17` |
 | **Static** | `index.html` | `nginx:alpine` |
 | **PHP** | `composer.json` | *Detected (Detection only)* |
 
