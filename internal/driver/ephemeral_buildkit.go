@@ -14,6 +14,8 @@ const (
 	ephemeralBuildKitPort             = "1234"
 	ephemeralBuildKitLabelKey         = "hubfly.builder.ephemeral"
 	ephemeralBuildKitLabelValue       = "true"
+	ephemeralBuildKitWorkerNetMode    = "host"
+	ephemeralBuildKitHostEntitlement  = "network.host"
 	defaultEphemeralControlNetwork    = "bridge"
 	ephemeralBuildKitReadinessTimeout = 30 * time.Second
 	ephemeralBuildKitReadinessPoll    = 500 * time.Millisecond
@@ -70,6 +72,8 @@ func StartEphemeralBuildKit(opts EphemeralBuildKitOpts) (*EphemeralBuildKit, err
 		"--network", controlNetwork,
 		ephemeralBuildKitImage,
 		"--addr", "tcp://0.0.0.0:"+ephemeralBuildKitPort,
+		"--oci-worker-net="+ephemeralBuildKitWorkerNetMode,
+		"--allow-insecure-entitlement="+ephemeralBuildKitHostEntitlement,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start ephemeral buildkit container %q: %w", containerName, err)

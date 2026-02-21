@@ -131,6 +131,7 @@ Creates a new build job and queues it for execution.
 
 `buildConfig.network` is required:
 - The worker starts an ephemeral `buildkitd` container for every job, attaches it to the requested Docker network, and uses it for the build.
+- The ephemeral daemon runs OCI workers in `host` network mode and build requests force `network=host`, so build `RUN` containers share the daemon network namespace (including the attached user network).
 - If missing/empty, the job is rejected with `no user network provided`.
 
 - **Responses:**
@@ -142,7 +143,7 @@ Creates a new build job and queues it for execution.
 ```bash
 curl -X POST http://localhost:8781/api/v1/jobs \
   -H "Content-Type: application/json" \
-  -d '{"id":"b1", "projectId":"p1", "userId":"u1", "sourceType":"git", "sourceInfo":{"gitRepository":"https://github.com/bonheur15/hubfly-sample-react-bun.git"}, "buildConfig":{"isAutoBuild":true}}'
+  -d '{"id":"b1", "projectId":"p1", "userId":"u1", "sourceType":"git", "sourceInfo":{"gitRepository":"https://github.com/bonheur15/hubfly-sample-react-bun.git"}, "buildConfig":{"isAutoBuild":true,"network":"proj-network-p1"}}'
 ```
 
 ### 2. Get Job Status
