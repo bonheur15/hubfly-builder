@@ -155,7 +155,7 @@ func (w *Worker) Run() error {
 			w.log("WARNING: failed to clean up ephemeral BuildKit daemon %s: %v", ephemeralSession.ContainerName, stopErr)
 		}
 	}()
-	w.log("Ephemeral BuildKit ready: container=%s controlNetwork=%s userNetwork=%s addr=%s", ephemeralSession.ContainerName, ephemeralSession.ControlNetwork, ephemeralSession.UserNetwork, ephemeralSession.Addr)
+	w.log("Ephemeral BuildKit ready: container=%s controlNetwork=%s userNetwork=%s workerNet=host runNet=host addr=%s", ephemeralSession.ContainerName, ephemeralSession.ControlNetwork, ephemeralSession.UserNetwork, ephemeralSession.Addr)
 	activeBuildKit := driver.NewBuildKit(ephemeralSession.Addr)
 
 	dockerfilePath := filepath.Join(buildContext, "Dockerfile")

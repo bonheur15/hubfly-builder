@@ -6,6 +6,11 @@ import (
 	"sort"
 )
 
+const (
+	buildNetworkModeHost        = "host"
+	buildNetworkHostEntitlement = "network.host"
+)
+
 type BuildKit struct {
 	// buildkitd address, e.g., "tcp://172.18.0.5:1234"
 	// For this project, this should come from an ephemeral per-job buildkitd session.
@@ -34,10 +39,12 @@ func (bk *BuildKit) BuildCommand(opts BuildOpts) *exec.Cmd {
 	args := []string{
 		"--addr", bk.Addr,
 		"build",
+		"--allow", buildNetworkHostEntitlement,
 		"--progress=plain",
 		"--frontend", "dockerfile.v0",
 		"--local", fmt.Sprintf("context=%s", opts.ContextPath),
 		"--local", fmt.Sprintf("dockerfile=%s", opts.DockerfilePath),
+		"--opt", "force-network-mode="+buildNetworkModeHost,
 	}
 
 	for _, key := range sortedMapKeys(opts.BuildArgs) {
