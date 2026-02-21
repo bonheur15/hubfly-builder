@@ -120,7 +120,7 @@ func (w *Worker) Run() error {
 		w.job.BuildConfig.Env = copyStringMap(w.job.Env)
 	}
 
-	envResult := envplan.Resolve(buildContext, w.job.BuildConfig.Env)
+	envResult := envplan.Resolve(buildContext, w.job.BuildConfig.Env, w.job.BuildConfig.EnvOverrides)
 	w.job.BuildConfig.ResolvedEnvPlan = envResult.Entries
 	w.logResolvedEnvPlan(envResult.Entries)
 	if len(w.job.BuildConfig.Env) > 0 {
@@ -135,6 +135,27 @@ func (w *Worker) Run() error {
 		return w.failJob("failed to prepare build secrets")
 	}
 	defer cleanupSecrets()
+
+	activeBuildKit := w.buildkit
+	if requestedNetwork := strings.TrimSpace(w.job.BuildConfig.Network); requestedNetwork != "" {
+		w.log("Starting ephemeral BuildKit daemon for network: %s", requestedNetwork)
+		ephemeralSession, startErr := driver.StartEphemeralBuildKit(driver.EphemeralBuildKitOpts{
+			JobID:          w.job.ID,
+			UserNetwork:    requestedNetwork,
+			ControlNetwork: strings.TrimSpace(os.Getenv("BUILDKIT_CONTROL_NETWORK")),
+		})
+		if startErr != nil {
+			w.log("ERROR: failed to start ephemeral BuildKit daemon: %v", startErr)
+			return w.failJob("failed to start ephemeral BuildKit daemon")
+		}
+		defer func() {
+			if stopErr := ephemeralSession.Stop(); stopErr != nil {
+				w.log("WARNING: failed to clean up ephemeral BuildKit daemon %s: %v", ephemeralSession.ContainerName, stopErr)
+			}
+		}()
+		w.log("Ephemeral BuildKit ready: container=%s controlNetwork=%s userNetwork=%s addr=%s", ephemeralSession.ContainerName, ephemeralSession.ControlNetwork, ephemeralSession.UserNetwork, ephemeralSession.Addr)
+		activeBuildKit = driver.NewBuildKit(ephemeralSession.Addr)
+	}
 
 	dockerfilePath := filepath.Join(buildContext, "Dockerfile")
 	if _, err := os.Stat(dockerfilePath); err == nil {
@@ -155,7 +176,7 @@ func (w *Worker) Run() error {
 			BuildArgs:      envResult.BuildArgs,
 			Secrets:        buildSecrets,
 		}
-		buildCmd := w.buildkit.BuildCommand(opts)
+		buildCmd := activeBuildKit.BuildCommand(opts)
 		if err := w.executeCommand(buildCmd); err != nil {
 			w.log("ERROR: BuildKit build failed: %v", err)
 			return w.failJob("BuildKit build failed")
@@ -226,7 +247,7 @@ func (w *Worker) Run() error {
 			BuildArgs:      envResult.BuildArgs,
 			Secrets:        buildSecrets,
 		}
-		buildCmd := w.buildkit.BuildCommand(opts)
+		buildCmd := activeBuildKit.BuildCommand(opts)
 		if err := w.executeCommand(buildCmd); err != nil {
 			w.log("ERROR: BuildKit build failed: %v", err)
 			return w.failJob("BuildKit build failed")

@@ -46,12 +46,13 @@ func (r Result) RuntimeKeys() []string {
 	return keys
 }
 
-func Resolve(buildContext string, env map[string]string) Result {
+func Resolve(buildContext string, env map[string]string, envOverrides map[string]storage.EnvOverride) Result {
 	if len(env) == 0 {
 		return Result{}
 	}
 
 	hints := collectBuildHints(buildContext)
+	normalizedOverrides := normalizeOverrides(envOverrides)
 
 	entries := make([]storage.ResolvedEnvVar, 0, len(env))
 	buildArgs := make(map[string]string)
@@ -82,6 +83,16 @@ func Resolve(buildContext string, env map[string]string) Result {
 			// Dockerfile ARG usage implies the author expects a build-arg value.
 			secret = false
 		}
+		if override, ok := lookupOverride(key, upperKey, normalizedOverrides); ok {
+			if overrideScope, valid := parseScopeOverride(override.Scope); valid {
+				scope = overrideScope
+				reason = appendReason(reason, "override-scope")
+			}
+			if override.Secret != nil {
+				secret = *override.Secret
+				reason = appendReason(reason, "override-secret")
+			}
+		}
 
 		entry := storage.ResolvedEnvVar{
 			Key:    key,
@@ -109,6 +120,57 @@ func Resolve(buildContext string, env map[string]string) Result {
 		BuildSecrets: buildSecrets,
 		Entries:      entries,
 	}
+}
+
+func normalizeOverrides(overrides map[string]storage.EnvOverride) map[string]storage.EnvOverride {
+	if len(overrides) == 0 {
+		return nil
+	}
+
+	normalized := make(map[string]storage.EnvOverride, len(overrides)*2)
+	for key, override := range overrides {
+		trimmed := strings.TrimSpace(key)
+		if trimmed == "" {
+			continue
+		}
+		normalized[trimmed] = override
+		normalized[strings.ToUpper(trimmed)] = override
+	}
+	return normalized
+}
+
+func lookupOverride(key, upperKey string, overrides map[string]storage.EnvOverride) (storage.EnvOverride, bool) {
+	if len(overrides) == 0 {
+		return storage.EnvOverride{}, false
+	}
+	if override, ok := overrides[key]; ok {
+		return override, true
+	}
+	override, ok := overrides[upperKey]
+	return override, ok
+}
+
+func parseScopeOverride(scope string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "build":
+		return "build", true
+	case "runtime":
+		return "runtime", true
+	case "both":
+		return "both", true
+	default:
+		return "", false
+	}
+}
+
+func appendReason(current, extra string) string {
+	if extra == "" {
+		return current
+	}
+	if current == "" {
+		return extra
+	}
+	return current + "+" + extra
 }
 
 type buildHints struct {
