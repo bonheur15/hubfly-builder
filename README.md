@@ -25,6 +25,7 @@ The builder can be configured via environment variables or a JSON configuration 
 | Key | Description | Default / Example |
 | :--- | :--- | :--- |
 | `BUILDKIT_ADDR` | Address of the BuildKit daemon | `unix:///run/buildkit/buildkitd.sock` |
+| `BUILDKIT_CONTROL_NETWORK` | Control-plane Docker network for ephemeral per-job BuildKit daemons (used when `buildConfig.network` is set) | `bridge` (host mode) / auto-detected in container mode |
 | `REGISTRY_URL` | Default registry to push images to | `localhost:5000` |
 | `CALLBACK_URL` | Backend webhook for reporting results | `https://api.hubfly.space/builds/callback` |
 | `PORT` | Port for the builder server to listen on | `8781` |
@@ -98,10 +99,15 @@ Creates a new build job and queues it for execution.
     "version": "1.2",
     "prebuildCommand": "bun install",
     "buildCommand": "bun run build",
+    "network": "user123_net",
     "env": {
       "NEXT_PUBLIC_API_URL": "https://api.example.com",
       "DATABASE_URL": "postgres://...",
       "SENTRY_AUTH_TOKEN": "..."
+    },
+    "envOverrides": {
+      "NEXT_PUBLIC_API_URL": { "secret": true },
+      "DATABASE_URL": { "scope": "build", "secret": true }
     },
     "timeoutSeconds": 3600,
     "resourceLimits": {
@@ -118,6 +124,15 @@ Creates a new build job and queues it for execution.
 - Unknown keys default to `runtime`.
 - Unknown/sensitive keys default to `secret` and are mounted as BuildKit secrets for build-time usage.
 - The resolved result is returned as `buildConfig.resolvedEnvPlan` and callback metadata (`runtimeEnvKeys`).
+
+`buildConfig.envOverrides` is optional:
+- If provided for a key, override values take precedence over auto-detection.
+- `scope` supports `build`, `runtime`, or `both`.
+- `secret` (`true`/`false`) forces whether the key is mounted as a build secret vs passed as build-arg when build scope is active.
+
+`buildConfig.network` is optional:
+- If set, the worker starts an ephemeral `buildkitd` container for that job, attaches it to the requested Docker network, and uses it for the build.
+- If unset, the worker falls back to the shared BuildKit daemon configured via `BUILDKIT_ADDR`.
 
 - **Responses:**
   - `201 Created`: Job successfully queued. The response body includes the fully populated `BuildConfig`, including the auto-generated `dockerfileContent` (if `isAutoBuild` was `true`).
@@ -202,6 +217,7 @@ Clears all jobs from the SQLite database. **Use with caution.**
 ### Prerequisites
 - **Go 1.18+**
 - **BuildKit:** Ensure `buildkitd` is running.
+- **Docker CLI + daemon access:** Required when using `buildConfig.network` (ephemeral per-job BuildKit mode).
 - **Git:** Installed and available in PATH.
 
 ### Installation
