@@ -111,9 +111,11 @@ func (s *Server) CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 			PrebuildCommand:   detectedConfig.PrebuildCommand,
 			BuildCommand:      detectedConfig.BuildCommand,
 			RunCommand:        detectedConfig.RunCommand,
+			Network:           job.BuildConfig.Network,          // Keep incoming network target.
 			TimeoutSeconds:    job.BuildConfig.TimeoutSeconds,   // Keep original timeout
 			ResourceLimits:    job.BuildConfig.ResourceLimits,   // Keep original resource limits
 			Env:               job.BuildConfig.Env,              // Keep incoming env vars.
+			EnvOverrides:      job.BuildConfig.EnvOverrides,     // Keep incoming env override hints.
 			ResolvedEnvPlan:   job.BuildConfig.ResolvedEnvPlan,  // Keep any pre-resolved metadata.
 			DockerfileContent: detectedConfig.DockerfileContent,
 		}
