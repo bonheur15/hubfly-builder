@@ -83,6 +83,11 @@ type ResourceLimits struct {
 	MemoryMB int `json:"memoryMB"`
 }
 
+type EnvOverride struct {
+	Scope  string `json:"scope,omitempty"`  // build, runtime, both
+	Secret *bool  `json:"secret,omitempty"` // nil means auto-detect
+}
+
 type ResolvedEnvVar struct {
 	Key    string `json:"key"`
 	Scope  string `json:"scope"` // build, runtime, both
@@ -97,9 +102,11 @@ type BuildConfig struct {
 	PrebuildCommand   string            `json:"prebuildCommand"`
 	BuildCommand      string            `json:"buildCommand"`
 	RunCommand        string            `json:"runCommand"`
+	Network           string            `json:"network,omitempty"`
 	TimeoutSeconds    int               `json:"timeoutSeconds"`
 	ResourceLimits    ResourceLimits    `json:"resourceLimits"`
 	Env               map[string]string `json:"env,omitempty"`
+	EnvOverrides      map[string]EnvOverride `json:"envOverrides,omitempty"`
 	ResolvedEnvPlan   []ResolvedEnvVar  `json:"resolvedEnvPlan,omitempty"`
 	DockerfileContent []byte            `json:"dockerfileContent,omitempty"`
 }

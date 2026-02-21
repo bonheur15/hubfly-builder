@@ -20,10 +20,11 @@ const maxConcurrentBuilds = 3
 const logRetentionDays = 7
 
 type EnvConfig struct {
-	BuildkitAddr string `json:"BUILDKIT_ADDR"`
-	BuildkitHost string `json:"BUILDKIT_HOST"`
-	RegistryURL  string `json:"REGISTRY_URL"`
-	CallbackURL  string `json:"CALLBACK_URL"`
+	BuildkitAddr           string `json:"BUILDKIT_ADDR"`
+	BuildkitHost           string `json:"BUILDKIT_HOST"`
+	BuildkitControlNetwork string `json:"BUILDKIT_CONTROL_NETWORK"`
+	RegistryURL            string `json:"REGISTRY_URL"`
+	CallbackURL            string `json:"CALLBACK_URL"`
 }
 
 func loadOrInitEnvConfig() {
@@ -36,10 +37,11 @@ func loadOrInitEnvConfig() {
 		}
 
 		config := EnvConfig{
-			BuildkitAddr: "",
-			BuildkitHost: "",
-			RegistryURL:  "",
-			CallbackURL:  "",
+			BuildkitAddr:           "",
+			BuildkitHost:           "",
+			BuildkitControlNetwork: "",
+			RegistryURL:            "",
+			CallbackURL:            "",
 		}
 		data, _ := json.MarshalIndent(config, "", "  ")
 		if err := os.WriteFile(filename, data, 0644); err != nil {
@@ -68,6 +70,9 @@ func loadOrInitEnvConfig() {
 	if config.BuildkitHost != "" {
 		os.Setenv("BUILDKIT_HOST", config.BuildkitHost)
 	}
+	if config.BuildkitControlNetwork != "" {
+		os.Setenv("BUILDKIT_CONTROL_NETWORK", config.BuildkitControlNetwork)
+	}
 	if config.RegistryURL != "" {
 		os.Setenv("REGISTRY_URL", config.RegistryURL)
 	}
@@ -90,6 +95,7 @@ func main() {
 	}
 	callbackURL := os.Getenv("CALLBACK_URL") // e.g., "http://localhost:3000/api/builds/callback"
 	buildkitHost := os.Getenv("BUILDKIT_HOST")
+	buildkitControlNetwork := os.Getenv("BUILDKIT_CONTROL_NETWORK")
 
 	allowedCommands, err := allowlist.LoadAllowedCommands("configs/allowed-commands.json")
 	if err != nil {
@@ -118,8 +124,11 @@ func main() {
 	log.SetOutput(io.MultiWriter(os.Stdout, systemLogFile))
 	log.SetFlags(log.LstdFlags | log.LUTC)
 	log.Printf("System log file: %s", systemLogPath)
-	log.Printf("Env: BUILDKIT_ADDR=%q BUILDKIT_HOST=%q REGISTRY_URL=%q CALLBACK_URL=%q", os.Getenv("BUILDKIT_ADDR"), buildkitHost, os.Getenv("REGISTRY_URL"), os.Getenv("CALLBACK_URL"))
-	log.Printf("Effective: BUILDKIT_ADDR=%q REGISTRY_URL=%q CALLBACK_URL=%q", buildkitAddr, registry, callbackURL)
+	log.Printf("Env: BUILDKIT_ADDR=%q BUILDKIT_HOST=%q BUILDKIT_CONTROL_NETWORK=%q REGISTRY_URL=%q CALLBACK_URL=%q", os.Getenv("BUILDKIT_ADDR"), buildkitHost, buildkitControlNetwork, os.Getenv("REGISTRY_URL"), os.Getenv("CALLBACK_URL"))
+	log.Printf("Effective: BUILDKIT_ADDR=%q BUILDKIT_CONTROL_NETWORK=%q REGISTRY_URL=%q CALLBACK_URL=%q", buildkitAddr, buildkitControlNetwork, registry, callbackURL)
+	if err := driver.CleanupOrphanedEphemeralBuildKits(); err != nil {
+		log.Printf("WARN: could not cleanup stale ephemeral BuildKit containers: %v", err)
+	}
 
 	// Start log cleanup routine
 	go func() {
