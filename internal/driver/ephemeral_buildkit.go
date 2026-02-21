@@ -50,11 +50,11 @@ func StartEphemeralBuildKit(opts EphemeralBuildKitOpts) (*EphemeralBuildKit, err
 		return nil, err
 	}
 
-	if err := ensureDockerNetworkExists(controlNetwork); err != nil {
+	if err := ensureDockerNetworkExists(userNetwork); err != nil {
 		return nil, err
 	}
 	if userNetwork != controlNetwork {
-		if err := ensureDockerNetworkExists(userNetwork); err != nil {
+		if err := ensureDockerNetworkExists(controlNetwork); err != nil {
 			return nil, err
 		}
 	}
@@ -69,7 +69,7 @@ func StartEphemeralBuildKit(opts EphemeralBuildKitOpts) (*EphemeralBuildKit, err
 		"--name", containerName,
 		"--privileged",
 		"--label", ephemeralBuildKitLabelKey+"="+ephemeralBuildKitLabelValue,
-		"--network", controlNetwork,
+		"--network", userNetwork,
 		ephemeralBuildKitImage,
 		"--addr", "tcp://0.0.0.0:"+ephemeralBuildKitPort,
 		"--oci-worker-net="+ephemeralBuildKitWorkerNetMode,
@@ -93,9 +93,9 @@ func StartEphemeralBuildKit(opts EphemeralBuildKitOpts) (*EphemeralBuildKit, err
 	}()
 
 	if userNetwork != controlNetwork {
-		output, connectErr := runDockerCommand("network", "connect", userNetwork, containerName)
+		output, connectErr := runDockerCommand("network", "connect", controlNetwork, containerName)
 		if connectErr != nil && !strings.Contains(strings.ToLower(output), "already exists") {
-			return nil, fmt.Errorf("failed to connect container %q to network %q: %w", containerName, userNetwork, connectErr)
+			return nil, fmt.Errorf("failed to connect container %q to network %q: %w", containerName, controlNetwork, connectErr)
 		}
 	}
 

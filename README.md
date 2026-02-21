@@ -130,7 +130,7 @@ Creates a new build job and queues it for execution.
 - `secret` (`true`/`false`) forces whether the key is mounted as a build secret vs passed as build-arg when build scope is active.
 
 `buildConfig.network` is required:
-- The worker starts an ephemeral `buildkitd` container for every job, attaches it to the requested Docker network, and uses it for the build.
+- The worker starts an ephemeral `buildkitd` container for every job on the requested Docker network as primary, then connects the control network for builder-to-daemon communication.
 - The ephemeral daemon runs OCI workers in `host` network mode and build requests force `network=host`, so build `RUN` containers share the daemon network namespace (including the attached user network).
 - If missing/empty, the job is rejected with `no user network provided`.
 
