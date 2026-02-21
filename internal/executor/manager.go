@@ -8,7 +8,6 @@ import (
 
 	"hubfly-builder/internal/allowlist"
 	"hubfly-builder/internal/api"
-	"hubfly-builder/internal/driver"
 	"hubfly-builder/internal/logs"
 	"hubfly-builder/internal/storage"
 )
@@ -19,7 +18,6 @@ type Manager struct {
 	storage       *storage.Storage
 	logManager    *logs.LogManager
 	allowlist     *allowlist.AllowedCommands
-	buildkit      *driver.BuildKit
 	apiClient     *api.Client
 	registry      string
 	maxConcurrent int
@@ -28,12 +26,11 @@ type Manager struct {
 	newJobSignal  chan struct{}
 }
 
-func NewManager(storage *storage.Storage, logManager *logs.LogManager, allowlist *allowlist.AllowedCommands, buildkit *driver.BuildKit, apiClient *api.Client, registry string, maxConcurrent int) *Manager {
+func NewManager(storage *storage.Storage, logManager *logs.LogManager, allowlist *allowlist.AllowedCommands, apiClient *api.Client, registry string, maxConcurrent int) *Manager {
 	return &Manager{
 		storage:       storage,
 		logManager:    logManager,
 		allowlist:     allowlist,
-		buildkit:      buildkit,
 		apiClient:     apiClient,
 		registry:      registry,
 		maxConcurrent: maxConcurrent,
@@ -89,7 +86,7 @@ func (m *Manager) tryToDispatchJob() {
 		return
 	}
 
-	worker := NewWorker(job, m.storage, m.logManager, m.allowlist, m.buildkit, m.apiClient, m.registry)
+	worker := NewWorker(job, m.storage, m.logManager, m.allowlist, m.apiClient, m.registry)
 	go func() {
 		defer func() {
 			m.mu.Lock()

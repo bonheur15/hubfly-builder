@@ -7,16 +7,12 @@ import (
 )
 
 type BuildKit struct {
-	// buildkitd address, e.g., "unix:///run/buildkit/buildkitd.sock"
-	// This can be configured via startup flags.
+	// buildkitd address, e.g., "tcp://172.18.0.5:1234"
+	// For this project, this should come from an ephemeral per-job buildkitd session.
 	Addr string
 }
 
 func NewBuildKit(addr string) *BuildKit {
-	if addr == "" {
-		// Provide a default, but it's better to configure this.
-		addr = "unix:///run/buildkit/buildkitd.sock"
-	}
 	return &BuildKit{Addr: addr}
 }
 

@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"hubfly-builder/internal/allowlist"
@@ -58,6 +59,10 @@ func (s *Server) CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Incoming %s %s payload: %s", r.Method, r.URL.Path, string(body))
 	if err := json.Unmarshal(body, &job); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(job.BuildConfig.Network) == "" {
+		http.Error(w, "no user network provided", http.StatusBadRequest)
 		return
 	}
 	if len(job.BuildConfig.Env) == 0 && len(job.Env) > 0 {

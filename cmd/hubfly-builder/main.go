@@ -20,8 +20,6 @@ const maxConcurrentBuilds = 3
 const logRetentionDays = 7
 
 type EnvConfig struct {
-	BuildkitAddr           string `json:"BUILDKIT_ADDR"`
-	BuildkitHost           string `json:"BUILDKIT_HOST"`
 	BuildkitControlNetwork string `json:"BUILDKIT_CONTROL_NETWORK"`
 	RegistryURL            string `json:"REGISTRY_URL"`
 	CallbackURL            string `json:"CALLBACK_URL"`
@@ -37,8 +35,6 @@ func loadOrInitEnvConfig() {
 		}
 
 		config := EnvConfig{
-			BuildkitAddr:           "",
-			BuildkitHost:           "",
 			BuildkitControlNetwork: "",
 			RegistryURL:            "",
 			CallbackURL:            "",
@@ -64,12 +60,6 @@ func loadOrInitEnvConfig() {
 	}
 
 	// Set environment variables if they are present in the config
-	if config.BuildkitAddr != "" {
-		os.Setenv("BUILDKIT_ADDR", config.BuildkitAddr)
-	}
-	if config.BuildkitHost != "" {
-		os.Setenv("BUILDKIT_HOST", config.BuildkitHost)
-	}
 	if config.BuildkitControlNetwork != "" {
 		os.Setenv("BUILDKIT_CONTROL_NETWORK", config.BuildkitControlNetwork)
 	}
@@ -84,17 +74,11 @@ func loadOrInitEnvConfig() {
 func main() {
 	loadOrInitEnvConfig()
 
-	// In a real app, get these from config/flags
-	buildkitAddr := os.Getenv("BUILDKIT_ADDR")
-	if buildkitAddr == "" {
-		buildkitAddr = "unix:///run/buildkit/buildkitd.sock"
-	}
 	registry := os.Getenv("REGISTRY_URL")
 	if registry == "" {
 		registry = "localhost:5000" // Example registry
 	}
 	callbackURL := os.Getenv("CALLBACK_URL") // e.g., "http://localhost:3000/api/builds/callback"
-	buildkitHost := os.Getenv("BUILDKIT_HOST")
 	buildkitControlNetwork := os.Getenv("BUILDKIT_CONTROL_NETWORK")
 
 	allowedCommands, err := allowlist.LoadAllowedCommands("configs/allowed-commands.json")
@@ -124,8 +108,8 @@ func main() {
 	log.SetOutput(io.MultiWriter(os.Stdout, systemLogFile))
 	log.SetFlags(log.LstdFlags | log.LUTC)
 	log.Printf("System log file: %s", systemLogPath)
-	log.Printf("Env: BUILDKIT_ADDR=%q BUILDKIT_HOST=%q BUILDKIT_CONTROL_NETWORK=%q REGISTRY_URL=%q CALLBACK_URL=%q", os.Getenv("BUILDKIT_ADDR"), buildkitHost, buildkitControlNetwork, os.Getenv("REGISTRY_URL"), os.Getenv("CALLBACK_URL"))
-	log.Printf("Effective: BUILDKIT_ADDR=%q BUILDKIT_CONTROL_NETWORK=%q REGISTRY_URL=%q CALLBACK_URL=%q", buildkitAddr, buildkitControlNetwork, registry, callbackURL)
+	log.Printf("Env: BUILDKIT_CONTROL_NETWORK=%q REGISTRY_URL=%q CALLBACK_URL=%q", buildkitControlNetwork, os.Getenv("REGISTRY_URL"), os.Getenv("CALLBACK_URL"))
+	log.Printf("Effective: BUILDKIT_CONTROL_NETWORK=%q REGISTRY_URL=%q CALLBACK_URL=%q", buildkitControlNetwork, registry, callbackURL)
 	if err := driver.CleanupOrphanedEphemeralBuildKits(); err != nil {
 		log.Printf("WARN: could not cleanup stale ephemeral BuildKit containers: %v", err)
 	}
@@ -142,10 +126,9 @@ func main() {
 		}
 	}()
 
-	buildkit := driver.NewBuildKit(buildkitAddr)
 	apiClient := api.NewClient(callbackURL)
 
-	manager := executor.NewManager(storage, logManager, allowedCommands, buildkit, apiClient, registry, maxConcurrentBuilds)
+	manager := executor.NewManager(storage, logManager, allowedCommands, apiClient, registry, maxConcurrentBuilds)
 	go manager.Start()
 
 	server := server.NewServer(storage, logManager, manager, allowedCommands)

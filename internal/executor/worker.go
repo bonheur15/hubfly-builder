@@ -31,7 +31,6 @@ type Worker struct {
 	storage    *storage.Storage
 	logManager *logs.LogManager
 	allowlist  *allowlist.AllowedCommands
-	buildkit   *driver.BuildKit
 	apiClient  *api.Client
 	registry   string
 	logFile    *os.File
@@ -39,13 +38,12 @@ type Worker struct {
 	workDir    string
 }
 
-func NewWorker(job *storage.BuildJob, storage *storage.Storage, logManager *logs.LogManager, allowlist *allowlist.AllowedCommands, buildkit *driver.BuildKit, apiClient *api.Client, registry string) *Worker {
+func NewWorker(job *storage.BuildJob, storage *storage.Storage, logManager *logs.LogManager, allowlist *allowlist.AllowedCommands, apiClient *api.Client, registry string) *Worker {
 	return &Worker{
 		job:        job,
 		storage:    storage,
 		logManager: logManager,
 		allowlist:  allowlist,
-		buildkit:   buildkit,
 		apiClient:  apiClient,
 		registry:   registry,
 	}
@@ -136,26 +134,29 @@ func (w *Worker) Run() error {
 	}
 	defer cleanupSecrets()
 
-	activeBuildKit := w.buildkit
-	if requestedNetwork := strings.TrimSpace(w.job.BuildConfig.Network); requestedNetwork != "" {
-		w.log("Starting ephemeral BuildKit daemon for network: %s", requestedNetwork)
-		ephemeralSession, startErr := driver.StartEphemeralBuildKit(driver.EphemeralBuildKitOpts{
-			JobID:          w.job.ID,
-			UserNetwork:    requestedNetwork,
-			ControlNetwork: strings.TrimSpace(os.Getenv("BUILDKIT_CONTROL_NETWORK")),
-		})
-		if startErr != nil {
-			w.log("ERROR: failed to start ephemeral BuildKit daemon: %v", startErr)
-			return w.failJob("failed to start ephemeral BuildKit daemon")
-		}
-		defer func() {
-			if stopErr := ephemeralSession.Stop(); stopErr != nil {
-				w.log("WARNING: failed to clean up ephemeral BuildKit daemon %s: %v", ephemeralSession.ContainerName, stopErr)
-			}
-		}()
-		w.log("Ephemeral BuildKit ready: container=%s controlNetwork=%s userNetwork=%s addr=%s", ephemeralSession.ContainerName, ephemeralSession.ControlNetwork, ephemeralSession.UserNetwork, ephemeralSession.Addr)
-		activeBuildKit = driver.NewBuildKit(ephemeralSession.Addr)
+	requestedNetwork := strings.TrimSpace(w.job.BuildConfig.Network)
+	if requestedNetwork == "" {
+		w.log("ERROR: no user network provided")
+		return w.failJob("no user network provided")
 	}
+
+	w.log("Starting ephemeral BuildKit daemon for network: %s", requestedNetwork)
+	ephemeralSession, startErr := driver.StartEphemeralBuildKit(driver.EphemeralBuildKitOpts{
+		JobID:          w.job.ID,
+		UserNetwork:    requestedNetwork,
+		ControlNetwork: strings.TrimSpace(os.Getenv("BUILDKIT_CONTROL_NETWORK")),
+	})
+	if startErr != nil {
+		w.log("ERROR: failed to start ephemeral BuildKit daemon: %v", startErr)
+		return w.failJob("failed to start ephemeral BuildKit daemon")
+	}
+	defer func() {
+		if stopErr := ephemeralSession.Stop(); stopErr != nil {
+			w.log("WARNING: failed to clean up ephemeral BuildKit daemon %s: %v", ephemeralSession.ContainerName, stopErr)
+		}
+	}()
+	w.log("Ephemeral BuildKit ready: container=%s controlNetwork=%s userNetwork=%s addr=%s", ephemeralSession.ContainerName, ephemeralSession.ControlNetwork, ephemeralSession.UserNetwork, ephemeralSession.Addr)
+	activeBuildKit := driver.NewBuildKit(ephemeralSession.Addr)
 
 	dockerfilePath := filepath.Join(buildContext, "Dockerfile")
 	if _, err := os.Stat(dockerfilePath); err == nil {
