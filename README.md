@@ -1,6 +1,6 @@
 # Hubfly Builder
 
-**Hubfly Builder** is a high-performance, standalone Go service designed to orchestrate container image builds using [BuildKit](https://github.com/moby/buildkit). It provides a robust API for managing build jobs, supports automatic runtime detection, implements a secure command allowlist, and ensures persistence through a local SQLite database.
+**Hubfly Builder** Is a high-performance, standalone Go service designed to orchestrate container image builds using [BuildKit](https://github.com/moby/buildkit). It provides a robust API for managing build jobs, supports automatic runtime detection, implements a secure command allowlist, and ensures persistence through a local SQLite database.
 
 ## Architecture & Features
 
@@ -24,7 +24,6 @@ The builder can be configured via environment variables or a JSON configuration 
 
 | Key | Description | Default / Example |
 | :--- | :--- | :--- |
-| `BUILDKIT_CONTROL_NETWORK` | Control-plane Docker network for ephemeral per-job BuildKit daemons | `bridge` (host mode) / auto-detected in container mode |
 | `REGISTRY_URL` | Default registry to push images to | `localhost:5000` |
 | `CALLBACK_URL` | Backend webhook for reporting results | `https://api.hubfly.space/builds/callback` |
 | `PORT` | Port for the builder server to listen on | `8781` |
@@ -130,7 +129,7 @@ Creates a new build job and queues it for execution.
 - `secret` (`true`/`false`) forces whether the key is mounted as a build secret vs passed as build-arg when build scope is active.
 
 `buildConfig.network` is required:
-- The worker starts an ephemeral `buildkitd` container for every job, attaches it to the requested Docker network, and uses it for the build.
+- The worker starts an ephemeral `buildkitd` container for every job on the requested Docker network and uses that same network for builder-to-daemon communication.
 - The ephemeral daemon runs OCI workers in `host` network mode and build requests force `network=host`, so build `RUN` containers share the daemon network namespace (including the attached user network).
 - If missing/empty, the job is rejected with `no user network provided`.
 
