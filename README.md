@@ -1,6 +1,6 @@
 # Hubfly Builder
 
-**Hubfly Builder** is a high-performance, standalone Go service designed to orchestrate container image builds using [BuildKit](https://github.com/moby/buildkit). It provides a robust API for managing build jobs, supports automatic runtime detection, implements a secure command allowlist, and ensures persistence through a local SQLite database.
+**Hubfly Builder** Is a high-performance, standalone Go service designed to orchestrate container image builds using [BuildKit](https://github.com/moby/buildkit). It provides a robust API for managing build jobs, supports automatic runtime detection, implements a secure command allowlist, and ensures persistence through a local SQLite database.
 
 ## Architecture & Features
 
