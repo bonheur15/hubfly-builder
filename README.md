@@ -24,7 +24,6 @@ The builder can be configured via environment variables or a JSON configuration 
 
 | Key | Description | Default / Example |
 | :--- | :--- | :--- |
-| `BUILDKIT_CONTROL_NETWORK` | Control-plane Docker network for ephemeral per-job BuildKit daemons | `bridge` (host mode) / auto-detected in container mode |
 | `REGISTRY_URL` | Default registry to push images to | `localhost:5000` |
 | `CALLBACK_URL` | Backend webhook for reporting results | `https://api.hubfly.space/builds/callback` |
 | `PORT` | Port for the builder server to listen on | `8781` |
@@ -130,7 +129,7 @@ Creates a new build job and queues it for execution.
 - `secret` (`true`/`false`) forces whether the key is mounted as a build secret vs passed as build-arg when build scope is active.
 
 `buildConfig.network` is required:
-- The worker starts an ephemeral `buildkitd` container for every job on the requested Docker network as primary, then connects the control network for builder-to-daemon communication.
+- The worker starts an ephemeral `buildkitd` container for every job on the requested Docker network and uses that same network for builder-to-daemon communication.
 - The ephemeral daemon runs OCI workers in `host` network mode and build requests force `network=host`, so build `RUN` containers share the daemon network namespace (including the attached user network).
 - If missing/empty, the job is rejected with `no user network provided`.
 
