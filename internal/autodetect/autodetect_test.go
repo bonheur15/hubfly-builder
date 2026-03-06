@@ -434,6 +434,68 @@ func TestAutoDetectBuildConfigViteUsesStaticRuntime(t *testing.T) {
 	}
 }
 
+func TestAutoDetectBuildConfigViteWithServerRunScriptUsesNodeRuntime(t *testing.T) {
+	repo := t.TempDir()
+	writePackageJSONWithFields(t, repo, map[string]string{
+		"build": "vite build",
+		"start": "node server.js",
+	}, "", map[string]string{
+		"react": "18.0.0",
+	}, map[string]string{
+		"vite": "5.0.0",
+	}, nil)
+	touchFile(t, repo, "package-lock.json")
+	touchFile(t, repo, "vite.config.ts")
+	touchFile(t, repo, "server.js")
+
+	cfg, err := AutoDetectBuildConfig(repo, nodeAllowedCommands())
+	if err != nil {
+		t.Fatalf("AutoDetectBuildConfig returned error: %v", err)
+	}
+
+	if cfg.Runtime != "node" {
+		t.Fatalf("expected node runtime, got %q", cfg.Runtime)
+	}
+	if cfg.RunCommand != "npm start" {
+		t.Fatalf("expected npm start run command, got %q", cfg.RunCommand)
+	}
+	dockerfile := string(cfg.DockerfileContent)
+	if strings.Contains(dockerfile, "FROM nginx:alpine") {
+		t.Fatalf("did not expect nginx runtime stage in Dockerfile, got:\n%s", dockerfile)
+	}
+}
+
+func TestAutoDetectBuildConfigAstroWithServerRunScriptUsesNodeRuntime(t *testing.T) {
+	repo := t.TempDir()
+	writePackageJSONWithFields(t, repo, map[string]string{
+		"build": "astro build",
+		"start": "node server.js",
+	}, "", map[string]string{
+		"astro": "4.0.0",
+	}, nil, nil)
+	touchFile(t, repo, "package-lock.json")
+	touchFile(t, repo, "server.js")
+
+	cfg, err := AutoDetectBuildConfig(repo, nodeAllowedCommands())
+	if err != nil {
+		t.Fatalf("AutoDetectBuildConfig returned error: %v", err)
+	}
+
+	if cfg.Runtime != "node" {
+		t.Fatalf("expected node runtime, got %q", cfg.Runtime)
+	}
+	if cfg.Framework != "astro" {
+		t.Fatalf("expected astro framework, got %q", cfg.Framework)
+	}
+	if cfg.RunCommand != "npm start" {
+		t.Fatalf("expected npm start run command, got %q", cfg.RunCommand)
+	}
+	dockerfile := string(cfg.DockerfileContent)
+	if strings.Contains(dockerfile, "FROM nginx:alpine") {
+		t.Fatalf("did not expect nginx runtime stage in Dockerfile, got:\n%s", dockerfile)
+	}
+}
+
 func TestAutoDetectBuildConfigNodePrismaAddsGenerateAndRuntimeInit(t *testing.T) {
 	repo := t.TempDir()
 	writePackageJSONWithFields(t, repo, map[string]string{
