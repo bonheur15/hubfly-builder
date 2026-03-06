@@ -8,9 +8,11 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/gorilla/mux"
@@ -28,6 +30,8 @@ type Server struct {
 	manager    *executor.Manager
 	allowlist  *allowlist.AllowedCommands
 }
+
+var credentialURLPattern = regexp.MustCompile(`https?://[^@\s]+@`)
 
 func NewServer(storage *storage.Storage, logManager *logs.LogManager, manager *executor.Manager, allowlist *allowlist.AllowedCommands) *Server {
 	return &Server{
@@ -54,16 +58,29 @@ func (s *Server) CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 	var job storage.BuildJob
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		log.Printf("ERROR: failed to read request body for %s %s: %v", r.Method, r.URL.Path, err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	log.Printf("Incoming %s %s payload: %s", r.Method, r.URL.Path, string(body))
+	log.Printf("Incoming %s %s payloadBytes=%d", r.Method, r.URL.Path, len(body))
 	if err := json.Unmarshal(body, &job); err != nil {
+		log.Printf("ERROR: failed to decode request body for %s %s: %v", r.Method, r.URL.Path, err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	job.BuildConfig.NormalizePhaseAliases()
+	log.Printf(
+		"CreateJob decoded: id=%s projectId=%s sourceType=%s repo=%s ref=%s workingDir=%q autoBuild=%t",
+		job.ID,
+		job.ProjectID,
+		job.SourceType,
+		sanitizeGitRepositoryURL(job.SourceInfo.GitRepository),
+		job.SourceInfo.Ref,
+		job.SourceInfo.WorkingDir,
+		job.BuildConfig.IsAutoBuild,
+	)
 	if strings.TrimSpace(job.BuildConfig.Network) == "" {
+		log.Printf("ERROR: job %s missing buildConfig.network", job.ID)
 		http.Error(w, "no user network provided", http.StatusBadRequest)
 		return
 	}
@@ -77,25 +94,47 @@ func (s *Server) CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 		// a separate service to handle repo inspection before creating the job.
 		tempDir, err := os.MkdirTemp("", "hubfly-builder-autodetect-")
 		if err != nil {
+			log.Printf("ERROR: job %s failed to create temp dir for autodetect: %v", job.ID, err)
 			http.Error(w, "failed to create temp dir for autodetect", http.StatusInternalServerError)
 			return
 		}
 		defer os.RemoveAll(tempDir)
 
 		cloneCmd := exec.Command("git", "clone", job.SourceInfo.GitRepository, tempDir)
-		if err := cloneCmd.Run(); err != nil {
+		if output, err := cloneCmd.CombinedOutput(); err != nil {
+			log.Printf(
+				"ERROR: job %s failed to clone repository repo=%s err=%v output=%s",
+				job.ID,
+				sanitizeGitRepositoryURL(job.SourceInfo.GitRepository),
+				err,
+				sanitizeCommandOutput(string(output)),
+			)
 			http.Error(w, "failed to clone repository for autodetect", http.StatusBadRequest)
 			return
 		}
 
 		if job.SourceInfo.Ref != "" {
-			if err := exec.Command("git", "-C", tempDir, "checkout", job.SourceInfo.Ref).Run(); err != nil {
+			if output, err := exec.Command("git", "-C", tempDir, "checkout", job.SourceInfo.Ref).CombinedOutput(); err != nil {
+				log.Printf(
+					"ERROR: job %s failed to checkout ref=%s err=%v output=%s",
+					job.ID,
+					job.SourceInfo.Ref,
+					err,
+					sanitizeCommandOutput(string(output)),
+				)
 				http.Error(w, fmt.Sprintf("failed to checkout ref %s", job.SourceInfo.Ref), http.StatusBadRequest)
 				return
 			}
 		}
 		if job.SourceInfo.CommitSha != "" {
-			if err := exec.Command("git", "-C", tempDir, "checkout", job.SourceInfo.CommitSha).Run(); err != nil {
+			if output, err := exec.Command("git", "-C", tempDir, "checkout", job.SourceInfo.CommitSha).CombinedOutput(); err != nil {
+				log.Printf(
+					"ERROR: job %s failed to checkout commit=%s err=%v output=%s",
+					job.ID,
+					job.SourceInfo.CommitSha,
+					err,
+					sanitizeCommandOutput(string(output)),
+				)
 				http.Error(w, fmt.Sprintf("failed to checkout commit %s", job.SourceInfo.CommitSha), http.StatusBadRequest)
 				return
 			}
@@ -103,6 +142,7 @@ func (s *Server) CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 
 		appDir, inspectDir, err := resolveWorkingDirectory(tempDir, job.SourceInfo.WorkingDir)
 		if err != nil {
+			log.Printf("ERROR: job %s invalid working directory %q: %v", job.ID, job.SourceInfo.WorkingDir, err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -120,6 +160,7 @@ func (s *Server) CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 
 			dockerfileContent, readErr := os.ReadFile(dockerfilePath)
 			if readErr != nil {
+				log.Printf("ERROR: job %s failed to read Dockerfile path=%s: %v", job.ID, dockerfilePath, readErr)
 				http.Error(w, "failed to read Dockerfile", http.StatusInternalServerError)
 				return
 			}
@@ -146,6 +187,13 @@ func (s *Server) CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 				WorkingDir: appDir,
 			}, s.allowlist)
 			if err != nil {
+				log.Printf(
+					"ERROR: job %s autodetect failed repo=%s appDir=%s: %v",
+					job.ID,
+					sanitizeGitRepositoryURL(job.SourceInfo.GitRepository),
+					appDir,
+					err,
+				)
 				http.Error(w, "failed to autodetect build config", http.StatusInternalServerError)
 				return
 			}
@@ -177,6 +225,7 @@ func (s *Server) CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 
 		buildContextPath, err := resolveBuildContextPath(tempDir, job.BuildConfig.BuildContextDir)
 		if err != nil {
+			log.Printf("ERROR: job %s invalid build context %q: %v", job.ID, job.BuildConfig.BuildContextDir, err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -186,6 +235,7 @@ func (s *Server) CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.storage.CreateJob(&job); err != nil {
+		log.Printf("ERROR: job %s failed to persist in storage: %v", job.ID, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -196,6 +246,38 @@ func (s *Server) CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(job)
+}
+
+func sanitizeGitRepositoryURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return sanitizeCommandOutput(raw)
+	}
+	if parsed.User != nil {
+		parsed.User = url.User("REDACTED")
+	}
+	return parsed.String()
+}
+
+func sanitizeCommandOutput(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	return credentialURLPattern.ReplaceAllStringFunc(raw, func(match string) string {
+		if strings.HasPrefix(match, "https://") {
+			return "https://REDACTED@"
+		}
+		if strings.HasPrefix(match, "http://") {
+			return "http://REDACTED@"
+		}
+		return "REDACTED@"
+	})
 }
 
 func resolveWorkingDirectory(repoRoot, workingDir string) (string, string, error) {

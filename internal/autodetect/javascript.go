@@ -5,6 +5,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -577,6 +578,8 @@ func shouldUseStaticRuntime(ctx jsProjectContext, framework, buildScript, runScr
 		return false
 	}
 	switch framework {
+	case "vite":
+		return true
 	case "next", "nuxt":
 		return false
 	}
@@ -621,9 +624,75 @@ func detectStaticOutputDir(ctx jsProjectContext, framework string) string {
 	switch framework {
 	case "cra":
 		return joinContainerPath(ctx.appWorkDir, "build")
+	case "vite":
+		return joinContainerPath(ctx.appWorkDir, detectViteOutputDir(ctx))
 	default:
 		return joinContainerPath(ctx.appWorkDir, "dist")
 	}
+}
+
+func detectViteOutputDir(ctx jsProjectContext) string {
+	if outDir := detectViteOutputDirFromBuildScript(ctx.AppMetadata); outDir != "" {
+		return outDir
+	}
+
+	for _, fileName := range []string{"vite.config.ts", "vite.config.js", "vite.config.mjs", "vite.config.cjs"} {
+		data, err := os.ReadFile(filepath.Join(ctx.AppPath, fileName))
+		if err != nil {
+			continue
+		}
+		if outDir := detectViteOutputDirFromConfig(string(data)); outDir != "" {
+			return outDir
+		}
+	}
+	return "dist"
+}
+
+func detectViteOutputDirFromBuildScript(metadata *nodePackageJSON) string {
+	if metadata == nil {
+		return ""
+	}
+
+	buildScript := strings.TrimSpace(metadata.Scripts[selectJSBuildScript(metadata)])
+	if buildScript == "" {
+		return ""
+	}
+
+	outDirFlagPattern := regexp.MustCompile("(?i)--outdir(?:=|\\s+)([^\\s\"'`]+)")
+	matches := outDirFlagPattern.FindStringSubmatch(buildScript)
+	if len(matches) != 2 {
+		return ""
+	}
+	return normalizeViteOutputDir(matches[1])
+}
+
+func detectViteOutputDirFromConfig(configBody string) string {
+	configBody = strings.TrimSpace(configBody)
+	if configBody == "" {
+		return ""
+	}
+
+	outDirConfigPattern := regexp.MustCompile("(?m)outDir\\s*:\\s*[\"'`]([^\"'`]+)[\"'`]")
+	matches := outDirConfigPattern.FindStringSubmatch(configBody)
+	if len(matches) != 2 {
+		return ""
+	}
+	return normalizeViteOutputDir(matches[1])
+}
+
+func normalizeViteOutputDir(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.Trim(value, "\"'`")
+	if value == "" {
+		return ""
+	}
+
+	value = strings.ReplaceAll(value, "\\", "/")
+	cleaned := path.Clean(value)
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") || strings.HasPrefix(cleaned, "/") {
+		return ""
+	}
+	return cleaned
 }
 
 func detectJavaScriptRunCommand(ctx jsProjectContext, runScript string) string {
