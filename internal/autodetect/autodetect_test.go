@@ -434,6 +434,94 @@ func TestAutoDetectBuildConfigViteUsesStaticRuntime(t *testing.T) {
 	}
 }
 
+func TestAutoDetectBuildConfigViteUsesConfiguredOutDir(t *testing.T) {
+	repo := t.TempDir()
+	writePackageJSONWithFields(t, repo, map[string]string{
+		"build":   "vite build",
+		"preview": "vite preview",
+	}, "", map[string]string{
+		"react": "18.0.0",
+	}, map[string]string{
+		"vite": "5.0.0",
+	}, nil)
+	touchFile(t, repo, "package-lock.json")
+	if err := os.WriteFile(filepath.Join(repo, "vite.config.ts"), []byte("export default { build: { outDir: 'build-output' } }\n"), 0o644); err != nil {
+		t.Fatalf("failed to write vite config: %v", err)
+	}
+
+	cfg, err := AutoDetectBuildConfig(repo, nodeAllowedCommands())
+	if err != nil {
+		t.Fatalf("AutoDetectBuildConfig returned error: %v", err)
+	}
+	if cfg.Runtime != "static" {
+		t.Fatalf("expected static runtime, got %q", cfg.Runtime)
+	}
+
+	dockerfile := string(cfg.DockerfileContent)
+	if !strings.Contains(dockerfile, "COPY --from=builder /app/build-output/ ./") {
+		t.Fatalf("expected configured outDir copy in Dockerfile, got:\n%s", dockerfile)
+	}
+}
+
+func TestAutoDetectBuildConfigViteUsesBuildScriptOutDirFlag(t *testing.T) {
+	repo := t.TempDir()
+	writePackageJSONWithFields(t, repo, map[string]string{
+		"build":   "tsc -b && vite build --outDir web-dist",
+		"preview": "vite preview",
+	}, "", map[string]string{
+		"react": "18.0.0",
+	}, map[string]string{
+		"vite":       "5.0.0",
+		"typescript": "5.5.0",
+	}, nil)
+	touchFile(t, repo, "package-lock.json")
+	touchFile(t, repo, "vite.config.ts")
+
+	cfg, err := AutoDetectBuildConfig(repo, nodeAllowedCommands())
+	if err != nil {
+		t.Fatalf("AutoDetectBuildConfig returned error: %v", err)
+	}
+	if cfg.Runtime != "static" {
+		t.Fatalf("expected static runtime, got %q", cfg.Runtime)
+	}
+
+	dockerfile := string(cfg.DockerfileContent)
+	if !strings.Contains(dockerfile, "COPY --from=builder /app/web-dist/ ./") {
+		t.Fatalf("expected outDir flag copy in Dockerfile, got:\n%s", dockerfile)
+	}
+}
+
+func TestAutoDetectBuildConfigViteWithExpressDependencyStillUsesStaticRuntime(t *testing.T) {
+	repo := t.TempDir()
+	writePackageJSONWithFields(t, repo, map[string]string{
+		"build":   "vite build",
+		"preview": "vite preview",
+	}, "", map[string]string{
+		"react":   "18.0.0",
+		"express": "4.19.0",
+	}, map[string]string{
+		"vite": "5.0.0",
+	}, nil)
+	touchFile(t, repo, "package-lock.json")
+	touchFile(t, repo, "vite.config.ts")
+
+	cfg, err := AutoDetectBuildConfig(repo, nodeAllowedCommands())
+	if err != nil {
+		t.Fatalf("AutoDetectBuildConfig returned error: %v", err)
+	}
+	if cfg.Runtime != "static" {
+		t.Fatalf("expected static runtime, got %q", cfg.Runtime)
+	}
+	if cfg.RunCommand != "" {
+		t.Fatalf("expected empty run command for static runtime, got %q", cfg.RunCommand)
+	}
+
+	dockerfile := string(cfg.DockerfileContent)
+	if !strings.Contains(dockerfile, "FROM nginx:alpine") {
+		t.Fatalf("expected nginx runtime stage in Dockerfile, got:\n%s", dockerfile)
+	}
+}
+
 func TestAutoDetectBuildConfigViteWithServerRunScriptUsesNodeRuntime(t *testing.T) {
 	repo := t.TempDir()
 	writePackageJSONWithFields(t, repo, map[string]string{
