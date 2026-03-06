@@ -577,22 +577,37 @@ func shouldUseStaticRuntime(ctx jsProjectContext, framework, buildScript, runScr
 		return false
 	}
 	switch framework {
-	case "vite", "astro", "cra", "angular":
-		return true
 	case "next", "nuxt":
 		return false
 	}
 	if hasAnyPackage(ctx.AppMetadata, "express", "koa", "fastify", "@nestjs/core", "hono") {
 		return false
 	}
+
+	runBody := ""
+	if runScript != "" && ctx.AppMetadata != nil {
+		runBody = strings.ToLower(strings.TrimSpace(ctx.AppMetadata.Scripts[runScript]))
+	}
+	// Keep Node/Bun runtime when an explicit production run script exists.
+	if runBody != "" && !strings.Contains(runBody, "preview") && !strings.Contains(runBody, "vite") {
+		return false
+	}
+
+	switch framework {
+	case "vite", "astro", "cra", "angular":
+		if runBody == "" {
+			return true
+		}
+		return strings.Contains(runBody, "preview") || strings.Contains(runBody, "vite")
+	}
+
 	if !hasAnyPackage(ctx.AppMetadata, "react", "react-dom", "vue", "svelte", "solid-js", "preact", "lit", "@angular/core") && !fileExists(filepath.Join(ctx.AppPath, "index.html")) {
 		return false
 	}
-	if runScript == "" {
+	if runBody == "" {
 		return true
 	}
-	body := strings.ToLower(strings.TrimSpace(ctx.AppMetadata.Scripts[runScript]))
-	return strings.Contains(body, "preview") || strings.Contains(body, "vite")
+	return strings.Contains(runBody, "preview") || strings.Contains(runBody, "vite")
 }
 
 func normalizeStaticFramework(framework string) string {
