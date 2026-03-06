@@ -109,7 +109,7 @@ Creates a new build job and queues it for execution.
     },
     "timeoutSeconds": 3600,
     "resourceLimits": {
-      "cpu": 2,
+      "cpu": 0.5,
       "memoryMB": 2048
     }
   }

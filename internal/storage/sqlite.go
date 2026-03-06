@@ -80,7 +80,7 @@ func (a *SourceInfo) Scan(value interface{}) error {
 }
 
 type ResourceLimits struct {
-	CPU      int `json:"cpu"`
+	CPU      float64 `json:"cpu"`
 	MemoryMB int `json:"memoryMB"`
 }
 
