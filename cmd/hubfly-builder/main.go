@@ -96,7 +96,11 @@ func main() {
 	callbackURL := os.Getenv("CALLBACK_URL") // e.g., "http://localhost:3000/api/builds/callback"
 	allowedCommands := allowlist.DefaultAllowedCommands()
 
-	storage, err := storage.NewStorage("./hubfly-builder.sqlite")
+	if err := os.MkdirAll("data", 0o755); err != nil {
+		log.Fatalf("could not create data directory: %s\n", err)
+	}
+
+	storage, err := storage.NewStorage("./data/hubfly-builder.sqlite")
 	if err != nil {
 		log.Fatalf("could not create storage: %s\n", err)
 	}
