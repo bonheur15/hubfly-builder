@@ -1,8 +1,9 @@
-docker run -d -p 5000:5000 --restart always --name registry registry:3
+docker run -d -p 10009:5000 --restart always --name registry registry:3
 
-LATEST=$(curl -s https://api.github.com/repos/moby/buildkit/releases/latest | grep browser_download_url | grep linux |grep amd64 | cut -d '"' -f 4)
+LATEST=$(curl -s https://api.github.com/repos/moby/buildkit/releases/latest \
+ | grep -o 'https://[^"]*linux-amd64.tar.gz')
 
-wget $LATEST -O buildkit.tgz
+wget "$LATEST" -O buildkit.tgz
 tar -xvf buildkit.tgz
 sudo mv bin/buildctl /usr/local/bin/
 sudo mv bin/buildkitd /usr/local/bin/

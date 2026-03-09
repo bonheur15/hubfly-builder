@@ -23,7 +23,7 @@ const (
 	defaultBuildKitAddr = "docker-container://buildkitd"
 	defaultBuildKitHost = "docker-container://buildkitd"
 	defaultCallbackURL  = "https://hubfly.space/api/builds/callback"
-	defaultRegistryURL  = "127.0.0.1:5000"
+	defaultRegistryURL  = "127.0.0.1:10009"
 	defaultServerAddr   = ":10008"
 )
 

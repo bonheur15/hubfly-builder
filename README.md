@@ -26,9 +26,8 @@ The builder can be configured via environment variables or an optional JSON over
 | :--- | :--- | :--- |
 | `BUILDKIT_ADDR` | Default BuildKit address | `docker-container://buildkitd` |
 | `BUILDKIT_HOST` | Default BuildKit host | `docker-container://buildkitd` |
-| `REGISTRY_URL` | Default registry to push images to | `127.0.0.1:5000` |
+| `REGISTRY_URL` | Default registry to push images to | `127.0.0.1:10009` |
 | `CALLBACK_URL` | Backend webhook for reporting results | `https://hubfly.space/api/builds/callback` |
-| `PORT` | Port for the builder server to listen on | `10008` |
 
 Example optional `configs/env.json`:
 
@@ -36,10 +35,24 @@ Example optional `configs/env.json`:
 {
   "BUILDKIT_ADDR": "docker-container://buildkitd",
   "BUILDKIT_HOST": "docker-container://buildkitd",
-  "REGISTRY_URL": "127.0.0.1:5000",
+  "REGISTRY_URL": "127.0.0.1:10009",
   "CALLBACK_URL": "https://hubfly.space/api/builds/callback"
 }
 ```
+
+---
+
+## Runtime Layout
+
+At runtime the builder creates and uses these local paths:
+
+| Path | Purpose |
+| :--- | :--- |
+| `./data/hubfly-builder.sqlite` | SQLite database for jobs and state |
+| `./log/` | System log and per-job build logs |
+| `./configs/env.json` | Optional local config overrides |
+
+Make sure the process user can create and write these paths.
 
 ---
 
@@ -235,87 +248,128 @@ Clears all jobs from the SQLite database. **Use with caution.**
 
 ## Getting Started
 
-### Prerequisites
-- **Go 1.18+**
-- **Docker CLI + daemon access:** Required for ephemeral per-job BuildKit mode.
-- **Git:** Installed and available in PATH.
+### Linux Prerequisites
 
-### Installation
+The builder is intended to run on Linux with Docker available locally.
+
+Required commands:
+
+- `docker`
+- `buildctl`
+- `git`
+
+To build the binary from source, you also need a working Go toolchain installed locally.
+
+Recommended baseline packages on Debian/Ubuntu:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git curl ca-certificates
+```
+
+Before starting the builder, verify the host is ready:
+
+```bash
+docker version
+buildctl --version
+git --version
+```
+
+The builder process must be able to:
+
+- talk to the Docker daemon
+- create and remove containers
+- inspect Docker networks
+- clone Git repositories over the network
+- push built images to the configured registry
+- write to `./data` and `./log`
+
+If you run it as a non-root user, that user normally needs access to Docker, for example through the `docker` group.
+
+### Builder Runtime Notes
+
+For each job, the builder:
+
+- clones the repository into a temporary workspace
+- starts an ephemeral `buildkitd` container on the requested Docker network
+- runs the build through `buildctl`
+- pushes the image to `REGISTRY_URL`
+- removes the temporary workspace and the ephemeral BuildKit container
+
+The Docker network provided in `buildConfig.network` must already exist before the job is submitted.
+
+### Build From Source
 ```bash
 git clone https://github.com/hubfly/hubfly-builder.git
 cd hubfly-builder
 go mod download
+go build -o hubfly-builder ./cmd/hubfly-builder
 ```
 
-### Running the Server
+### Run The Server
 ```bash
-go run cmd/hubfly-builder/main.go
+./hubfly-builder
 ```
 
 The server will start on port `10008` by default.
 
+### Development Run
 
+```bash
+go run ./cmd/hubfly-builder
+```
+
+### Version Output
+
+Release builds inject the version from the Git tag. To print it:
+
+```bash
+./hubfly-builder version
+```
+
+This command prints only the version string.
+
+### First-Run Checklist
+
+- ensure Docker is running
+- ensure `buildctl` is installed
+- ensure the requested Docker network already exists
+- ensure `REGISTRY_URL` is reachable from the builder host
+- ensure `CALLBACK_URL` is reachable from the builder host
+- ensure the process user can write `./data` and `./log`
 
 ---
 
-
-
 ## Utility Commands
-
-
 
 ### Checking Local Registry
 
 If you are running a local registry, you can list repositories and tags using:
 
-
-
 ```bash
-
 # List all repositories
-
-curl -s http://localhost:5000/v2/_catalog | jq
-
-
+curl -s http://127.0.0.1:10009/v2/_catalog | jq
 
 # List tags for a specific image
-
-curl -s http://localhost:5000/v2/user-123/my-awesome-project/tags/list | jq
-
+curl -s http://127.0.0.1:10009/v2/user-123/my-awesome-project/tags/list | jq
 ```
-
-
 
 ### Inspecting BuildKit
 
 To see the current BuildKit status for a running ephemeral daemon (use the `addr=` value from job logs):
 
-
-
 ```bash
-
 buildctl --addr tcp://<ephemeral-buildkit-ip>:1234 debug workers
-
 ```
-
-
 
 ### Manual Build Test
 
 To test a build manually using `buildctl` against an ephemeral daemon:
 
-
-
 ```bash
-
 buildctl --addr tcp://<ephemeral-buildkit-ip>:1234 build \
-
   --frontend=dockerfile.v0 \
-
   --local context=. \
-
   --local dockerfile=. \
-
-  --output type=image,name=localhost:5000/test-image:latest,push=true
-
+  --output type=image,name=127.0.0.1:10009/test-image:latest,push=true
 ```
