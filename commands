@@ -1,4 +1,4 @@
-docker run -d -p 10009:5000 --restart always --name registry registry:3
+docker run -d -p 10009:5000 --restart always --name registry registry
 
 LATEST=$(curl -s https://api.github.com/repos/moby/buildkit/releases/latest \
  | grep -o 'https://[^"]*linux-amd64.tar.gz')
