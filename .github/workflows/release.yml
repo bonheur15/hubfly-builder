@@ -19,7 +19,7 @@ jobs:
           go-version: "1.21"
 
       - name: Build
-        run: go build -o hubfly-builder ./cmd/hubfly-builder
+        run: go build -ldflags="-X main.version=${{ github.ref_name }}" -o hubfly-builder ./cmd/hubfly-builder
 
       - name: Create or Update Release
         uses: softprops/action-gh-release@v2

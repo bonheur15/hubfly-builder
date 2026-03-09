@@ -28,7 +28,7 @@ The builder can be configured via environment variables or an optional JSON over
 | `BUILDKIT_HOST` | Default BuildKit host | `docker-container://buildkitd` |
 | `REGISTRY_URL` | Default registry to push images to | `127.0.0.1:5000` |
 | `CALLBACK_URL` | Backend webhook for reporting results | `https://hubfly.space/api/builds/callback` |
-| `PORT` | Port for the builder server to listen on | `8781` |
+| `PORT` | Port for the builder server to listen on | `10008` |
 
 Example optional `configs/env.json`:
 
@@ -162,7 +162,7 @@ Callback payload excerpt:
 
 - **Example:**
 ```bash
-curl -X POST http://localhost:8781/api/v1/jobs \
+curl -X POST http://localhost:10008/api/v1/jobs \
   -H "Content-Type: application/json" \
   -d '{"id":"b1", "projectId":"p1", "userId":"u1", "sourceType":"git", "sourceInfo":{"gitRepository":"https://github.com/bonheur15/hubfly-sample-react-bun.git"}, "buildConfig":{"isAutoBuild":true,"network":"proj-network-p1"}}'
 ```
@@ -178,7 +178,7 @@ Retrieves the full metadata and current status of a job.
 
 - **Example:**
 ```bash
-curl -i http://localhost:8781/api/v1/jobs/b1
+curl -i http://localhost:10008/api/v1/jobs/b1
 ```
 
 ### 3. Get Job Logs
@@ -192,7 +192,7 @@ Returns the raw text logs of the build process.
 
 - **Example:**
 ```bash
-curl http://localhost:8781/api/v1/jobs/b1/logs
+curl http://localhost:10008/api/v1/jobs/b1/logs
 ```
 
 ### 4. Health Check
@@ -252,7 +252,7 @@ go mod download
 go run cmd/hubfly-builder/main.go
 ```
 
-The server will start on port `8781` by default.
+The server will start on port `10008` by default.
 
 
 

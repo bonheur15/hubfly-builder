@@ -24,7 +24,10 @@ const (
 	defaultBuildKitHost = "docker-container://buildkitd"
 	defaultCallbackURL  = "https://hubfly.space/api/builds/callback"
 	defaultRegistryURL  = "127.0.0.1:5000"
+	defaultServerAddr   = ":10008"
 )
+
+var version = "dev"
 
 type EnvConfig struct {
 	BuildKitAddr string `json:"BUILDKIT_ADDR"`
@@ -81,6 +84,11 @@ func setEnvIfEmpty(key, value string) {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "version" {
+		_, _ = io.WriteString(os.Stdout, version+"\n")
+		return
+	}
+
 	applyDefaultEnvConfig()
 	loadOptionalEnvConfig()
 
@@ -141,8 +149,8 @@ func main() {
 
 	server := server.NewServer(storage, logManager, manager, allowedCommands)
 
-	log.Println("Server listening on :8781")
-	if err := server.Start(":8781"); err != nil {
+	log.Printf("Server listening on %s", defaultServerAddr)
+	if err := server.Start(defaultServerAddr); err != nil {
 		log.Fatalf("could not start server: %s\n", err)
 	}
 }
