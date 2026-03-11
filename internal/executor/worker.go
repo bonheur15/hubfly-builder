@@ -26,6 +26,11 @@ import (
 
 var ErrBuildFailed = errors.New("build failed")
 
+const (
+	dockerPushMaxAttempts = 3
+	dockerPushRetryDelay  = 2 * time.Second
+)
+
 type Worker struct {
 	job        *storage.BuildJob
 	storage    *storage.Storage
@@ -249,12 +254,11 @@ func (w *Worker) Run() error {
 			BuildArgs:      envResult.BuildArgs,
 			Secrets:        buildSecrets,
 		}
-		buildCmd := activeBuildKit.BuildCommand(opts)
-		if err := w.executeCommand(buildCmd); err != nil {
-			w.log("ERROR: BuildKit build failed: %v", err)
-			return w.failJob("BuildKit build failed")
+		if err := w.buildAndPushImage(activeBuildKit, opts); err != nil {
+			w.log("ERROR: host-managed image export/push failed: %v", err)
+			return w.failJob("failed to export and push built image")
 		}
-		w.log("BuildKit build and push successful.")
+		w.log("BuildKit build export and host push successful.")
 		w.job.ImageTag = imageTag
 		if err := w.storage.UpdateJobImageTag(w.job.ID, imageTag); err != nil {
 			w.log("ERROR: could not update image tag: %v", err)
@@ -338,12 +342,11 @@ func (w *Worker) Run() error {
 			BuildArgs:      envResult.BuildArgs,
 			Secrets:        buildSecrets,
 		}
-		buildCmd := activeBuildKit.BuildCommand(opts)
-		if err := w.executeCommand(buildCmd); err != nil {
-			w.log("ERROR: BuildKit build failed: %v", err)
-			return w.failJob("BuildKit build failed")
+		if err := w.buildAndPushImage(activeBuildKit, opts); err != nil {
+			w.log("ERROR: host-managed image export/push failed: %v", err)
+			return w.failJob("failed to export and push built image")
 		}
-		w.log("BuildKit build and push successful.")
+		w.log("BuildKit build export and host push successful.")
 		w.job.ImageTag = imageTag
 		if err := w.storage.UpdateJobImageTag(w.job.ID, imageTag); err != nil {
 			w.log("ERROR: could not update image tag: %v", err)
@@ -414,6 +417,80 @@ func (w *Worker) executeCommand(cmd *exec.Cmd) error {
 	err = cmd.Wait()
 	wg.Wait()
 	return err
+}
+
+func (w *Worker) buildAndPushImage(activeBuildKit *driver.BuildKit, opts driver.BuildOpts) error {
+	exportDir, err := os.MkdirTemp("", fmt.Sprintf("hubfly-builder-image-%s-", w.job.ID))
+	if err != nil {
+		return fmt.Errorf("create image export directory: %w", err)
+	}
+	defer os.RemoveAll(exportDir)
+
+	exportPath := filepath.Join(exportDir, "image.tar")
+	opts.ExportPath = exportPath
+
+	w.log("Exporting BuildKit image archive to host path: %s", exportPath)
+	buildCmd := activeBuildKit.BuildCommand(opts)
+	if err := w.executeCommand(buildCmd); err != nil {
+		return fmt.Errorf("buildctl export failed: %w", err)
+	}
+
+	w.log("Loading exported image archive into host Docker daemon")
+	if err := w.executeCommand(exec.Command("docker", "load", "-i", exportPath)); err != nil {
+		return fmt.Errorf("docker load failed: %w", err)
+	}
+
+	if err := w.verifyLocalImageTag(opts.ImageTag); err != nil {
+		return err
+	}
+
+	defer func() {
+		if cleanupErr := w.removeLocalImage(opts.ImageTag); cleanupErr != nil {
+			w.log("WARNING: failed to remove local image %s after push workflow: %v", opts.ImageTag, cleanupErr)
+		}
+	}()
+
+	if err := w.pushLocalImage(opts.ImageTag); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (w *Worker) verifyLocalImageTag(imageTag string) error {
+	w.log("Verifying local Docker image tag exists: %s", imageTag)
+	if err := w.executeCommand(exec.Command("docker", "image", "inspect", imageTag)); err != nil {
+		return fmt.Errorf("loaded Docker image %q is not available locally: %w", imageTag, err)
+	}
+	return nil
+}
+
+func (w *Worker) pushLocalImage(imageTag string) error {
+	var lastErr error
+	for attempt := 1; attempt <= dockerPushMaxAttempts; attempt++ {
+		w.log("Pushing image to registry from host daemon (attempt %d/%d): %s", attempt, dockerPushMaxAttempts, imageTag)
+		if err := w.executeCommand(exec.Command("docker", "push", imageTag)); err != nil {
+			lastErr = err
+			if attempt < dockerPushMaxAttempts {
+				w.log("WARNING: docker push attempt %d failed for %s: %v", attempt, imageTag, err)
+				time.Sleep(dockerPushRetryDelay)
+				continue
+			}
+			break
+		}
+		w.log("Host-side docker push successful: %s", imageTag)
+		return nil
+	}
+
+	return fmt.Errorf("docker push failed after %d attempts for %s: %w", dockerPushMaxAttempts, imageTag, lastErr)
+}
+
+func (w *Worker) removeLocalImage(imageTag string) error {
+	w.log("Removing local Docker image from host daemon: %s", imageTag)
+	if err := w.executeCommand(exec.Command("docker", "image", "rm", "-f", imageTag)); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (w *Worker) streamPipe(pipe io.Reader) {

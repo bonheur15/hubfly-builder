@@ -11,6 +11,7 @@
 - **Secure by Design:** Auto-detected commands are validated against a built-in allowlist.
 - **Structured Logging:** Job logs are captured, stored locally, and served via API.
 - **Backend Integration:** Reports build outcomes (success/failure) via configurable webhooks.
+- **Host-Managed Registry Pushes:** BuildKit exports image archives to the host, and the builder loads, pushes, and cleans them up through the host Docker daemon.
 - **Resource Management:** Supports configurable per-job resource limits (CPU/Memory).
 - **Cleanup Automation:** Automatically prunes build workspaces and implements log retention policies.
 
@@ -293,7 +294,10 @@ For each job, the builder:
 - clones the repository into a temporary workspace
 - starts an ephemeral `buildkitd` container on the requested Docker network
 - runs the build through `buildctl`
-- pushes the image to `REGISTRY_URL`
+- exports the built image as a Docker archive back to the host
+- loads that archive into the host Docker daemon
+- pushes the image to `REGISTRY_URL` from the host
+- removes the local Docker image after the push attempt finishes
 - removes the temporary workspace and the ephemeral BuildKit container
 
 The Docker network provided in `buildConfig.network` must already exist before the job is submitted.

@@ -30,12 +30,13 @@ type BuildOpts struct {
 	ContextPath    string
 	DockerfilePath string
 	ImageTag       string
+	ExportPath     string
 	BuildArgs      map[string]string
 	Secrets        []BuildSecret
 }
 
 func (bk *BuildKit) BuildCommand(opts BuildOpts) *exec.Cmd {
-	// Example: buildctl --addr <addr> build --frontend dockerfile.v0 --local context=. --local dockerfile=. --output type=image,name=my-image,push=true
+	// Example: buildctl --addr <addr> build --frontend dockerfile.v0 --local context=. --local dockerfile=. --output type=docker,name=my-image,dest=/tmp/image.tar
 	args := []string{
 		"--addr", bk.Addr,
 		"build",
@@ -44,7 +45,7 @@ func (bk *BuildKit) BuildCommand(opts BuildOpts) *exec.Cmd {
 		"--frontend", "dockerfile.v0",
 		"--local", fmt.Sprintf("context=%s", opts.ContextPath),
 		"--local", fmt.Sprintf("dockerfile=%s", opts.DockerfilePath),
-		"--opt", "force-network-mode="+buildNetworkModeHost,
+		"--opt", "force-network-mode=" + buildNetworkModeHost,
 	}
 
 	for _, key := range sortedMapKeys(opts.BuildArgs) {
@@ -55,7 +56,7 @@ func (bk *BuildKit) BuildCommand(opts BuildOpts) *exec.Cmd {
 		args = append(args, "--secret", fmt.Sprintf("id=%s,src=%s", secret.ID, secret.Src))
 	}
 
-	args = append(args, "--output", fmt.Sprintf("type=image,name=%s,push=true,registry.insecure=true", opts.ImageTag))
+	args = append(args, "--output", fmt.Sprintf("type=docker,name=%s,dest=%s", opts.ImageTag, opts.ExportPath))
 	return exec.Command("buildctl", args...)
 }
 
