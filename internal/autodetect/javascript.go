@@ -83,6 +83,20 @@ func detectBuildPlan(opts AutoDetectOptions, allowed *allowlist.AllowedCommands)
 			return buildPlan{}, err
 		}
 		return plan, nil
+	case "go":
+		prebuild, build, run := detectCommandsWithPath(appPath, runtime, allowed)
+		plan, err := defaultBuildPlan(runtime, version, prebuild, build, run)
+		if err != nil {
+			return buildPlan{}, err
+		}
+		plan.BuildContextDir = appDir
+		plan.AppDir = appDir
+		plan.Framework = detectGoFramework(repoRoot, appPath)
+		plan.ExposePort = inferExposePort(defaultExposePort(runtime), run)
+		if err := validateBuildPlanCommands(plan, allowed); err != nil {
+			return buildPlan{}, err
+		}
+		return plan, nil
 	case "python":
 		plan, err := detectPythonBuildPlan(appDir, appPath, version, allowed)
 		if err != nil {
@@ -119,6 +133,10 @@ func detectBuildPlan(opts AutoDetectOptions, allowed *allowlist.AllowedCommands)
 		plan, err := defaultBuildPlan(runtime, version, prebuild, build, run)
 		if err != nil {
 			return buildPlan{}, err
+		}
+		if runtime == "java" {
+			plan.PostBuildCommands = append(plan.PostBuildCommands, javaSelectJarCommand())
+			plan.RunCommand = "java -jar app.jar"
 		}
 		plan.BuildContextDir = appDir
 		plan.AppDir = appDir

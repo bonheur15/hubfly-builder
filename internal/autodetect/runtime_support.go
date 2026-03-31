@@ -282,7 +282,8 @@ func isTrustedGeneratedCommand(command string) bool {
 		"yarn install --frozen-lockfile",
 		"yarn install --immutable",
 		"bun install --frozen-lockfile",
-		"python -m playwright install chromium":
+		"python -m playwright install chromium",
+		javaSelectJarCommand():
 		return true
 	}
 

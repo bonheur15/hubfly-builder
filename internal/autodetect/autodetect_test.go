@@ -77,12 +77,16 @@ func writeComposerJSON(t *testing.T, dir string, require map[string]string) {
 func javaAllowedCommands() *allowlist.AllowedCommands {
 	return &allowlist.AllowedCommands{
 		Prebuild: []string{
+			"chmod +x mvnw",
 			"mvn clean",
 			"./mvnw clean",
 			"gradle dependencies",
 			"./gradlew dependencies",
+			"chmod +x gradlew",
 		},
 		Build: []string{
+			"mvn -DoutputFile=target/mvn-dependency-list.log -B -DskipTests clean dependency:list install -Pproduction",
+			"./mvnw -DoutputFile=target/mvn-dependency-list.log -B -DskipTests clean dependency:list install -Pproduction",
 			"mvn install -DskipTests",
 			"./mvnw install -DskipTests",
 			"gradle build -x test",
@@ -91,6 +95,7 @@ func javaAllowedCommands() *allowlist.AllowedCommands {
 		Run: []string{
 			"java -jar target/*.jar",
 			"java -jar build/libs/*.jar",
+			"java -jar app.jar",
 		},
 	}
 }

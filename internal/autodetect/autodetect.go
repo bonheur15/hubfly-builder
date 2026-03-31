@@ -205,6 +205,91 @@ func discoverGoMainEntrypoints(repoPath string) []string {
 	return entrypoints
 }
 
+func detectGoFramework(repoRoot, appPath string) string {
+	beegoTokens := []string{"github.com/beego/beego/v2", "github.com/astaxie/beego"}
+	ginTokens := []string{"github.com/gin-gonic/gin"}
+
+	if hasGoModTokens(appPath, beegoTokens) || hasGoModTokens(repoRoot, beegoTokens) || hasGoImportTokens(appPath, beegoTokens) || hasGoImportTokens(repoRoot, beegoTokens) {
+		return "beego"
+	}
+	if hasGoModTokens(appPath, ginTokens) || hasGoModTokens(repoRoot, ginTokens) || hasGoImportTokens(appPath, ginTokens) || hasGoImportTokens(repoRoot, ginTokens) {
+		return "gin"
+	}
+	return ""
+}
+
+func hasGoModTokens(basePath string, tokens []string) bool {
+	if basePath == "" {
+		return false
+	}
+	return hasFileTokens(filepath.Join(basePath, "go.mod"), tokens)
+}
+
+func hasFileTokens(path string, tokens []string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	lower := strings.ToLower(string(data))
+	for _, token := range tokens {
+		if strings.Contains(lower, strings.ToLower(token)) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasGoImportTokens(repoPath string, tokens []string) bool {
+	if repoPath == "" {
+		return false
+	}
+	excludedDirs := map[string]struct{}{
+		".git":         {},
+		"vendor":       {},
+		"node_modules": {},
+	}
+
+	needle := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		needle = append(needle, strings.ToLower(token))
+	}
+
+	found := false
+	_ = filepath.WalkDir(repoPath, func(path string, d os.DirEntry, err error) error {
+		if err != nil || found {
+			return nil
+		}
+		if d.IsDir() {
+			name := strings.TrimSpace(d.Name())
+			if path != repoPath && strings.HasPrefix(name, ".") {
+				return filepath.SkipDir
+			}
+			if _, excluded := excludedDirs[name]; excluded {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		name := strings.TrimSpace(d.Name())
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil
+		}
+		lower := strings.ToLower(string(data))
+		for _, token := range needle {
+			if strings.Contains(lower, token) {
+				found = true
+				break
+			}
+		}
+		return nil
+	})
+	return found
+}
+
 func detectPythonCommands(repoPath string, allowed *allowlist.AllowedCommands) (string, string, string) {
 	prebuildCandidates := pythonPrebuildCandidates(repoPath)
 	buildCandidates := pythonBuildCandidates(repoPath)
@@ -795,25 +880,94 @@ func detectJavaCommands(repoPath string, allowed *allowlist.AllowedCommands) (st
 		prebuildCandidates := []string{"gradle dependencies"}
 		buildCandidates := []string{"gradle build -x test"}
 		if hasGradleWrapper {
-			prebuildCandidates = []string{"./gradlew dependencies", "gradle dependencies"}
+			prebuildCandidates = []string{"chmod +x gradlew", "./gradlew dependencies", "gradle dependencies"}
 			buildCandidates = []string{"./gradlew build -x test", "gradle build -x test"}
 		}
 
 		return pickFirstAllowed(prebuildCandidates, allowed.Prebuild),
 			pickFirstAllowed(buildCandidates, allowed.Build),
-			pickFirstAllowed([]string{"java -jar build/libs/*.jar"}, allowed.Run)
+			pickFirstAllowed(javaRunCandidates(repoPath, true), allowed.Run)
 	}
 
-	prebuildCandidates := []string{"mvn clean"}
-	buildCandidates := []string{"mvn install -DskipTests"}
+	prebuildCandidates := []string{}
+	buildCandidates := []string{"mvn -DoutputFile=target/mvn-dependency-list.log -B -DskipTests clean dependency:list install -Pproduction", "mvn install -DskipTests"}
 	if hasMavenWrapper {
-		prebuildCandidates = []string{"./mvnw clean", "mvn clean"}
-		buildCandidates = []string{"./mvnw install -DskipTests", "mvn install -DskipTests"}
+		prebuildCandidates = []string{"chmod +x mvnw"}
+		buildCandidates = []string{
+			"./mvnw -DoutputFile=target/mvn-dependency-list.log -B -DskipTests clean dependency:list install -Pproduction",
+			"./mvnw install -DskipTests",
+			"mvn -DoutputFile=target/mvn-dependency-list.log -B -DskipTests clean dependency:list install -Pproduction",
+			"mvn install -DskipTests",
+		}
 	}
 
 	return pickFirstAllowed(prebuildCandidates, allowed.Prebuild),
 		pickFirstAllowed(buildCandidates, allowed.Build),
-		pickFirstAllowed([]string{"java -jar target/*.jar"}, allowed.Run)
+		pickFirstAllowed(javaRunCandidates(repoPath, false), allowed.Run)
+}
+
+func javaRunCandidates(repoPath string, isGradle bool) []string {
+	candidates := make([]string, 0, 6)
+	if detectSpringBootProject(repoPath) {
+		if isGradle {
+			candidates = append(candidates, "java -jar build/libs/*-boot.jar", "java -jar build/libs/*-SNAPSHOT.jar")
+		} else {
+			candidates = append(candidates, "java -jar target/*-boot.jar", "java -jar target/*-SNAPSHOT.jar")
+		}
+	}
+	if detectQuarkusProject(repoPath) {
+		if isGradle {
+			candidates = append(candidates, "java -jar build/quarkus-app/quarkus-run.jar", "java -jar build/*-runner.jar")
+		} else {
+			candidates = append(candidates, "java -jar target/quarkus-app/quarkus-run.jar", "java -jar target/*-runner.jar")
+		}
+	}
+	if detectMicronautProject(repoPath) {
+		if isGradle {
+			candidates = append(candidates, "java -jar build/libs/*-all.jar")
+		} else {
+			candidates = append(candidates, "java -jar target/*-all.jar")
+		}
+	}
+	if isGradle {
+		candidates = append(candidates, "java -jar build/libs/*.jar")
+	} else {
+		candidates = append(candidates, "java -jar target/*.jar")
+	}
+	return candidates
+}
+
+func detectQuarkusProject(repoPath string) bool {
+	return hasBuildFileTokens(repoPath, []string{"io.quarkus", "quarkus-maven-plugin", "quarkus-gradle-plugin"})
+}
+
+func detectMicronautProject(repoPath string) bool {
+	return hasBuildFileTokens(repoPath, []string{"io.micronaut", "micronaut"})
+}
+
+func detectSpringBootProject(repoPath string) bool {
+	return hasBuildFileTokens(repoPath, []string{"org.springframework.boot", "spring-boot-starter"})
+}
+
+func hasBuildFileTokens(repoPath string, tokens []string) bool {
+	if repoPath == "" {
+		return false
+	}
+	files := []string{"pom.xml", "build.gradle", "build.gradle.kts"}
+	for _, name := range files {
+		path := filepath.Join(repoPath, name)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		lower := strings.ToLower(string(data))
+		for _, token := range tokens {
+			if strings.Contains(lower, strings.ToLower(token)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func pickAllowed(preferred string, allowed []string) string {

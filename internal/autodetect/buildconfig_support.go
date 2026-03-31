@@ -399,18 +399,25 @@ func detectCommandsWithoutAllowlist(repoPath, runtime string) (string, string, s
 			prebuildCandidates := []string{"gradle dependencies"}
 			buildCandidates := []string{"gradle build -x test"}
 			if hasGradleWrapper {
-				prebuildCandidates = []string{"./gradlew dependencies", "gradle dependencies"}
+				prebuildCandidates = []string{"chmod +x gradlew", "./gradlew dependencies", "gradle dependencies"}
 				buildCandidates = []string{"./gradlew build -x test", "gradle build -x test"}
 			}
-			return pickFirstNonEmpty(prebuildCandidates), pickFirstNonEmpty(buildCandidates), "java -jar build/libs/*.jar"
+			runCandidates := javaRunCandidates(repoPath, true)
+			return pickFirstNonEmpty(prebuildCandidates), pickFirstNonEmpty(buildCandidates), pickFirstNonEmpty(runCandidates)
 		}
-		prebuildCandidates := []string{"mvn clean"}
-		buildCandidates := []string{"mvn install -DskipTests"}
+		prebuildCandidates := []string{}
+		buildCandidates := []string{"mvn -DoutputFile=target/mvn-dependency-list.log -B -DskipTests clean dependency:list install -Pproduction", "mvn install -DskipTests"}
 		if hasMavenWrapper {
-			prebuildCandidates = []string{"./mvnw clean", "mvn clean"}
-			buildCandidates = []string{"./mvnw install -DskipTests", "mvn install -DskipTests"}
+			prebuildCandidates = []string{"chmod +x mvnw"}
+			buildCandidates = []string{
+				"./mvnw -DoutputFile=target/mvn-dependency-list.log -B -DskipTests clean dependency:list install -Pproduction",
+				"./mvnw install -DskipTests",
+				"mvn -DoutputFile=target/mvn-dependency-list.log -B -DskipTests clean dependency:list install -Pproduction",
+				"mvn install -DskipTests",
+			}
 		}
-		return pickFirstNonEmpty(prebuildCandidates), pickFirstNonEmpty(buildCandidates), "java -jar target/*.jar"
+		runCandidates := javaRunCandidates(repoPath, false)
+		return pickFirstNonEmpty(prebuildCandidates), pickFirstNonEmpty(buildCandidates), pickFirstNonEmpty(runCandidates)
 	case "php":
 		return pickFirstNonEmpty(phpInstallCandidates(repoPath)),
 			pickFirstNonEmpty(phpBuildCandidates(repoPath)),
