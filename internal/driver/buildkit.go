@@ -3,7 +3,9 @@ package driver
 import (
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"sort"
+	"strings"
 )
 
 const (
@@ -33,6 +35,11 @@ type BuildOpts struct {
 	ExportPath     string
 	BuildArgs      map[string]string
 	Secrets        []BuildSecret
+	CacheBackend   string
+	CacheDir       string
+	CacheKeys      []string
+	CacheRef       string
+	CacheRefs      []string
 }
 
 func (bk *BuildKit) BuildCommand(opts BuildOpts) *exec.Cmd {
@@ -56,8 +63,53 @@ func (bk *BuildKit) BuildCommand(opts BuildOpts) *exec.Cmd {
 		args = append(args, "--secret", fmt.Sprintf("id=%s,src=%s", secret.ID, secret.Src))
 	}
 
+	cacheBackend := strings.ToLower(strings.TrimSpace(opts.CacheBackend))
+	if cacheBackend == "" {
+		cacheBackend = "registry"
+	}
+
+	switch cacheBackend {
+	case "local":
+		cacheDir := strings.TrimSpace(opts.CacheDir)
+		if cacheDir != "" {
+			for _, key := range normalizedCacheKeys(opts.CacheKeys) {
+				cachePath := filepath.Join(cacheDir, key)
+				args = append(args, "--import-cache", fmt.Sprintf("type=local,src=%s", cachePath))
+				args = append(args, "--export-cache", fmt.Sprintf("type=local,dest=%s,mode=max", cachePath))
+			}
+		}
+	default:
+		for _, cacheRef := range normalizedCacheRefs(opts.CacheRefs, opts.CacheRef) {
+			args = append(args, "--import-cache", fmt.Sprintf("type=registry,ref=%s", cacheRef))
+			args = append(args, "--export-cache", fmt.Sprintf("type=registry,ref=%s,mode=max", cacheRef))
+		}
+	}
+
 	args = append(args, "--output", fmt.Sprintf("type=docker,name=%s,dest=%s", opts.ImageTag, opts.ExportPath))
 	return exec.Command("buildctl", args...)
+}
+
+func normalizedCacheRefs(cacheRefs []string, legacyRef string) []string {
+	seen := make(map[string]struct{})
+	out := make([]string, 0, len(cacheRefs)+1)
+
+	addRef := func(ref string) {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			return
+		}
+		if _, ok := seen[ref]; ok {
+			return
+		}
+		seen[ref] = struct{}{}
+		out = append(out, ref)
+	}
+
+	for _, ref := range cacheRefs {
+		addRef(ref)
+	}
+	addRef(legacyRef)
+	return out
 }
 
 func sortedMapKeys(values map[string]string) []string {
@@ -84,5 +136,33 @@ func sortedSecrets(secrets []BuildSecret) []BuildSecret {
 		}
 		return out[i].ID < out[j].ID
 	})
+	return out
+}
+
+func normalizedCacheKeys(keys []string) []string {
+	if len(keys) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(keys))
+	out := make([]string, 0, len(keys))
+	for _, key := range keys {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		key = filepath.Clean(key)
+		if key == "." || key == ".." || strings.HasPrefix(key, ".."+string(filepath.Separator)) {
+			continue
+		}
+		key = strings.TrimPrefix(key, string(filepath.Separator))
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, key)
+	}
 	return out
 }

@@ -93,6 +93,28 @@ func (w *Worker) Run() error {
 		return w.failJob("failed to clone repository")
 	}
 
+	var defaultBranch string
+	if w.job.SourceInfo.Ref == "" && w.job.SourceInfo.CommitSha == "" {
+		branchName, err := w.commandOutput(exec.Command("git", "-C", w.workDir, "rev-parse", "--abbrev-ref", "HEAD"))
+		if err == nil && branchName != "" && branchName != "HEAD" {
+			defaultBranch = branchName
+			w.log("Detected default branch: %s", defaultBranch)
+		}
+		w.log("No ref or commit specified; syncing to latest default branch HEAD")
+		if err := w.executeCommand(exec.Command("git", "-C", w.workDir, "fetch", "--prune", "origin")); err != nil {
+			w.log("ERROR: failed to fetch latest commits: %v", err)
+			return w.failJob("failed to fetch latest commits")
+		}
+		resetTarget := "origin/HEAD"
+		if defaultBranch != "" {
+			resetTarget = "origin/" + defaultBranch
+		}
+		if err := w.executeCommand(exec.Command("git", "-C", w.workDir, "reset", "--hard", resetTarget)); err != nil {
+			w.log("ERROR: failed to reset to %s: %v", resetTarget, err)
+			return w.failJob("failed to reset to latest commit")
+		}
+	}
+
 	if w.job.SourceInfo.Ref != "" {
 		w.log("Checking out ref: %s", w.job.SourceInfo.Ref)
 		checkoutRefCmd := exec.Command("git", "-C", w.workDir, "checkout", w.job.SourceInfo.Ref)
@@ -109,6 +131,10 @@ func (w *Worker) Run() error {
 			w.log("ERROR: failed to checkout commit %s: %v", w.job.SourceInfo.CommitSha, err)
 			return w.failJob("failed to checkout commit")
 		}
+	}
+
+	if commitSHA, err := w.commandOutput(exec.Command("git", "-C", w.workDir, "rev-parse", "HEAD")); err == nil && commitSHA != "" {
+		w.log("Checked out commit SHA: %s", commitSHA)
 	}
 
 	w.log("Repository cloned and checked out successfully.")
@@ -199,8 +225,12 @@ func (w *Worker) Run() error {
 
 	w.log("Starting ephemeral BuildKit daemon for network: %s", requestedNetwork)
 	ephemeralSession, startErr := driver.StartEphemeralBuildKit(driver.EphemeralBuildKitOpts{
-		JobID:       w.job.ID,
-		UserNetwork: requestedNetwork,
+		JobID:             w.job.ID,
+		UserNetwork:       requestedNetwork,
+		Registry:          w.registry,
+		RegistryPlainHTTP: registryPlainHTTPFromEnv(),
+		CacheDir:          cacheDirFromEnv(),
+		UseLocalCache:     strings.EqualFold(cacheBackendFromEnv(), "local"),
 	})
 	if startErr != nil {
 		w.log("ERROR: failed to start ephemeral BuildKit daemon: %v", startErr)
@@ -246,13 +276,18 @@ func (w *Worker) Run() error {
 
 		imageTag := w.generateImageTag()
 		w.log("Image tag: %s", imageTag)
+		buildArgs := buildArgsWithCacheID(envResult.BuildArgs, w.cacheMountID())
 
 		opts := driver.BuildOpts{
 			ContextPath:    buildContext,
 			DockerfilePath: buildContext,
 			ImageTag:       imageTag,
-			BuildArgs:      envResult.BuildArgs,
+			BuildArgs:      buildArgs,
 			Secrets:        buildSecrets,
+			CacheBackend:   cacheBackendFromEnv(),
+			CacheDir:       cacheDirFromEnv(),
+			CacheKeys:      w.cacheKeysForBuild(w.job.BuildConfig.Runtime, w.job.BuildConfig.Version, w.job.BuildConfig.InstallCommand, w.job.BuildConfig.BuildCommand),
+			CacheRefs:      w.cacheRefsForBuild(w.job.BuildConfig.Runtime, w.job.BuildConfig.Version, w.job.BuildConfig.InstallCommand, w.job.BuildConfig.BuildCommand),
 		}
 		if err := w.buildAndPushImage(activeBuildKit, opts); err != nil {
 			w.log("ERROR: host-managed image export/push failed: %v", err)
@@ -317,6 +352,9 @@ func (w *Worker) Run() error {
 		for _, warning := range detectedConfig.ValidationWarnings {
 			w.log("Resolved warning: %s", warning)
 		}
+		if detectedConfig.UseStaticRuntime {
+			w.log("Resolved static output dir: %s", detectedConfig.StaticOutputDir)
+		}
 
 		applyDetectedBuildConfig(&w.job.BuildConfig, detectedConfig)
 		w.job.BuildConfig.ValidationWarnings = mergeWarnings(w.job.BuildConfig.ValidationWarnings, detectedConfig.ValidationWarnings)
@@ -334,13 +372,18 @@ func (w *Worker) Run() error {
 		w.log("Dockerfile generated successfully, starting BuildKit build...")
 		imageTag := w.generateImageTag()
 		w.log("Image tag: %s", imageTag)
+		buildArgs := buildArgsWithCacheID(envResult.BuildArgs, w.cacheMountID())
 
 		opts := driver.BuildOpts{
 			ContextPath:    buildContext,
 			DockerfilePath: buildContext,
 			ImageTag:       imageTag,
-			BuildArgs:      envResult.BuildArgs,
+			BuildArgs:      buildArgs,
 			Secrets:        buildSecrets,
+			CacheBackend:   cacheBackendFromEnv(),
+			CacheDir:       cacheDirFromEnv(),
+			CacheKeys:      w.cacheKeysForBuild(w.job.BuildConfig.Runtime, w.job.BuildConfig.Version, w.job.BuildConfig.InstallCommand, w.job.BuildConfig.BuildCommand),
+			CacheRefs:      w.cacheRefsForBuild(w.job.BuildConfig.Runtime, w.job.BuildConfig.Version, w.job.BuildConfig.InstallCommand, w.job.BuildConfig.BuildCommand),
 		}
 		if err := w.buildAndPushImage(activeBuildKit, opts); err != nil {
 			w.log("ERROR: host-managed image export/push failed: %v", err)
@@ -417,6 +460,21 @@ func (w *Worker) executeCommand(cmd *exec.Cmd) error {
 	err = cmd.Wait()
 	wg.Wait()
 	return err
+}
+
+func (w *Worker) commandOutput(cmd *exec.Cmd) (string, error) {
+	w.log("Executing: %s", sanitizeCommandForLog(cmd))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		out := strings.TrimSpace(string(output))
+		if out == "" {
+			w.log("ERROR: command failed: %v", err)
+		} else {
+			w.log("ERROR: command failed: %v output=%s", err, out)
+		}
+		return "", err
+	}
+	return strings.TrimSpace(string(output)), nil
 }
 
 func (w *Worker) buildAndPushImage(activeBuildKit *driver.BuildKit, opts driver.BuildOpts) error {
@@ -515,6 +573,143 @@ func (w *Worker) generateImageTag() string {
 	sanitizedUserID := sanitize(w.job.UserID)
 	sanitizedProjectID := sanitize(w.job.ProjectID)
 	return fmt.Sprintf("%s/%s/%s:%s-b%s-v%s", w.registry, sanitizedUserID, sanitizedProjectID, shortSha, w.job.ID, ts)
+}
+
+func (w *Worker) cacheRef() string {
+	if w.registry == "" || w.job == nil {
+		return ""
+	}
+
+	userID := sanitizeImageTagComponent(w.job.UserID)
+	projectID := sanitizeImageTagComponent(w.job.ProjectID)
+	if userID == "" || projectID == "" {
+		return ""
+	}
+
+	return fmt.Sprintf("%s/hubfly-cache/%s/%s:buildcache", w.registry, userID, projectID)
+}
+
+func (w *Worker) cacheKey() string {
+	if w.job == nil {
+		return ""
+	}
+	userID := sanitizeImageTagComponent(w.job.UserID)
+	projectID := sanitizeImageTagComponent(w.job.ProjectID)
+	if userID == "" || projectID == "" {
+		return ""
+	}
+	return filepath.Join("hubfly-cache", userID, projectID)
+}
+
+func (w *Worker) cacheMountID() string {
+	if w.job == nil {
+		return ""
+	}
+	userID := sanitizeImageTagComponent(w.job.UserID)
+	projectID := sanitizeImageTagComponent(w.job.ProjectID)
+	if userID == "" || projectID == "" {
+		return ""
+	}
+	return fmt.Sprintf("hubfly-%s-%s", userID, projectID)
+}
+
+func buildArgsWithCacheID(base map[string]string, cacheID string) map[string]string {
+	if len(base) == 0 && strings.TrimSpace(cacheID) == "" {
+		return base
+	}
+	out := make(map[string]string, len(base)+1)
+	for key, value := range base {
+		out[key] = value
+	}
+	if strings.TrimSpace(cacheID) != "" {
+		out["HBF_CACHE_ID"] = cacheID
+	}
+	return out
+}
+
+func (w *Worker) cacheRefsForBuild(runtime, version, installCommand, buildCommand string) []string {
+	refs := make([]string, 0, 2)
+	if projectRef := w.cacheRef(); projectRef != "" {
+		refs = append(refs, projectRef)
+	}
+	if sharedRef := w.sharedCacheRef(runtime, version, installCommand, buildCommand); sharedRef != "" {
+		refs = append(refs, sharedRef)
+	}
+	return refs
+}
+
+func (w *Worker) cacheKeysForBuild(runtime, version, installCommand, buildCommand string) []string {
+	keys := make([]string, 0, 2)
+	if projectKey := w.cacheKey(); projectKey != "" {
+		keys = append(keys, projectKey)
+	}
+	if sharedKey := sharedCacheKey(runtime, version, installCommand, buildCommand); sharedKey != "" {
+		keys = append(keys, sharedKey)
+	}
+	return keys
+}
+
+func (w *Worker) sharedCacheRef(runtime, version, installCommand, buildCommand string) string {
+	if w.registry == "" {
+		return ""
+	}
+
+	runtime = sanitizeImageTagComponent(strings.ToLower(strings.TrimSpace(runtime)))
+	version = sanitizeImageTagComponent(strings.TrimSpace(version))
+	if runtime == "" || version == "" {
+		return ""
+	}
+
+	flavor := sharedCacheFlavor(runtime, installCommand, buildCommand)
+	keyParts := []string{runtime, version}
+	if flavor != "" {
+		keyParts = append(keyParts, flavor)
+	}
+	cacheKey := strings.Join(keyParts, "-")
+	return fmt.Sprintf("%s/hubfly-cache/shared/%s:buildcache", w.registry, cacheKey)
+}
+
+func sharedCacheKey(runtime, version, installCommand, buildCommand string) string {
+	runtime = sanitizeImageTagComponent(strings.ToLower(strings.TrimSpace(runtime)))
+	version = sanitizeImageTagComponent(strings.TrimSpace(version))
+	if runtime == "" || version == "" {
+		return ""
+	}
+
+	flavor := sharedCacheFlavor(runtime, installCommand, buildCommand)
+	keyParts := []string{runtime, version}
+	if flavor != "" {
+		keyParts = append(keyParts, flavor)
+	}
+	cacheKey := strings.Join(keyParts, "-")
+	return filepath.Join("hubfly-cache", "shared", cacheKey)
+}
+
+func sharedCacheFlavor(runtime, installCommand, buildCommand string) string {
+	switch runtime {
+	case "node":
+		return "bookworm-slim"
+	case "python":
+		return "slim"
+	case "go":
+		return "alpine"
+	case "php":
+		return "apache"
+	case "static":
+		return "nginx-alpine"
+	case "java":
+		combined := strings.ToLower(strings.TrimSpace(installCommand + " " + buildCommand))
+		switch {
+		case strings.Contains(combined, "gradle"), strings.Contains(combined, "./gradlew"):
+			return "gradle"
+		case strings.Contains(combined, "mvn"), strings.Contains(combined, "./mvnw"):
+			return "maven"
+		default:
+			return "jdk"
+		}
+	default:
+		return ""
+	}
 }
 
 func (w *Worker) logResolvedEnvPlan(entries []storage.ResolvedEnvVar) {
@@ -662,6 +857,31 @@ func sanitizeImageTagComponent(value string) string {
 		return ""
 	}
 	return cleaned
+}
+
+func registryPlainHTTPFromEnv() bool {
+	value := strings.TrimSpace(os.Getenv("REGISTRY_PLAIN_HTTP"))
+	if value == "" {
+		value = strings.TrimSpace(os.Getenv("REGISTRY_INSECURE"))
+	}
+	switch strings.ToLower(value) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func cacheBackendFromEnv() string {
+	value := strings.TrimSpace(os.Getenv("BUILDKIT_CACHE_BACKEND"))
+	if value == "" {
+		value = "registry"
+	}
+	return strings.ToLower(value)
+}
+
+func cacheDirFromEnv() string {
+	return strings.TrimSpace(os.Getenv("BUILDKIT_CACHE_DIR"))
 }
 
 func resolveWorkspacePath(repoRoot, workingDir string) (string, string, error) {

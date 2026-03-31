@@ -6,7 +6,7 @@ import (
 )
 
 func TestBuildEphemeralBuildKitRunArgsWithConfig(t *testing.T) {
-	args := buildEphemeralBuildKitRunArgs("hubfly-buildkit-job1", "user-net", "/tmp/buildkitd.toml")
+	args := buildEphemeralBuildKitRunArgs("hubfly-buildkit-job1", "user-net", "/tmp/buildkitd.toml", "", false)
 	got := strings.Join(args, " ")
 
 	for _, want := range []string{
@@ -24,7 +24,7 @@ func TestBuildEphemeralBuildKitRunArgsWithConfig(t *testing.T) {
 }
 
 func TestBuildEphemeralBuildKitRunArgsWithoutConfig(t *testing.T) {
-	args := buildEphemeralBuildKitRunArgs("hubfly-buildkit-job1", "user-net", "")
+	args := buildEphemeralBuildKitRunArgs("hubfly-buildkit-job1", "user-net", "", "", false)
 	got := strings.Join(args, " ")
 
 	if strings.Contains(got, "/etc/buildkit/buildkitd.toml") {

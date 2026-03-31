@@ -23,14 +23,19 @@ const (
 )
 
 type EphemeralBuildKitOpts struct {
-	JobID       string
-	UserNetwork string
+	JobID              string
+	UserNetwork        string
+	Registry           string
+	RegistryPlainHTTP  bool
+	CacheDir           string
+	UseLocalCache      bool
 }
 
 type EphemeralBuildKit struct {
 	ContainerName string
 	Addr          string
 	UserNetwork   string
+	configCleanup func()
 }
 
 func StartEphemeralBuildKit(opts EphemeralBuildKitOpts) (*EphemeralBuildKit, error) {
@@ -53,19 +58,34 @@ func StartEphemeralBuildKit(opts EphemeralBuildKitOpts) (*EphemeralBuildKit, err
 		return nil, err
 	}
 
-	buildKitConfigPath, err := resolveBuildKitConfigPath()
+	buildKitConfigPath, cleanupConfig, err := resolveBuildKitConfigPathWithRegistry(opts.Registry, opts.RegistryPlainHTTP)
 	if err != nil {
 		return nil, err
 	}
 
-	_, err = runDockerCommand(buildEphemeralBuildKitRunArgs(containerName, userNetwork, buildKitConfigPath)...)
+	cacheDir := strings.TrimSpace(opts.CacheDir)
+	if opts.UseLocalCache && cacheDir != "" {
+		absCacheDir, absErr := filepath.Abs(cacheDir)
+		if absErr != nil {
+			return nil, fmt.Errorf("failed to resolve cache dir %q: %w", cacheDir, absErr)
+		}
+		if err := os.MkdirAll(absCacheDir, 0o755); err != nil {
+			return nil, fmt.Errorf("failed to create cache dir %q: %w", absCacheDir, err)
+		}
+		cacheDir = absCacheDir
+	}
+	_, err = runDockerCommand(buildEphemeralBuildKitRunArgs(containerName, userNetwork, buildKitConfigPath, cacheDir, opts.UseLocalCache)...)
 	if err != nil {
+		if cleanupConfig != nil {
+			cleanupConfig()
+		}
 		return nil, fmt.Errorf("failed to start ephemeral buildkit container %q: %w", containerName, err)
 	}
 
 	session := &EphemeralBuildKit{
 		ContainerName: containerName,
 		UserNetwork:   userNetwork,
+		configCleanup: cleanupConfig,
 	}
 
 	cleanupOnFailure := true
@@ -104,13 +124,81 @@ func resolveBuildKitConfigPath() (string, error) {
 	return "", fmt.Errorf("failed to access BuildKit config %q: %w", ephemeralBuildKitConfigPath, err)
 }
 
-func buildEphemeralBuildKitRunArgs(containerName, userNetwork, configPath string) []string {
+func resolveBuildKitConfigPathWithRegistry(registry string, plainHTTP bool) (string, func(), error) {
+	basePath, err := resolveBuildKitConfigPath()
+	if err != nil {
+		return "", nil, err
+	}
+	if !plainHTTP {
+		return basePath, nil, nil
+	}
+
+	host := normalizeRegistryHost(registry)
+	if host == "" {
+		return basePath, nil, nil
+	}
+
+	var content string
+	if basePath != "" {
+		data, readErr := os.ReadFile(basePath)
+		if readErr != nil {
+			return "", nil, fmt.Errorf("failed to read BuildKit config %q: %w", basePath, readErr)
+		}
+		content = string(data)
+	}
+
+	registryBlock := fmt.Sprintf("[registry.%q]\n  http = true\n  insecure = true\n", host)
+	if !strings.Contains(content, fmt.Sprintf("[registry.%q]", host)) {
+		if content != "" && !strings.HasSuffix(content, "\n") {
+			content += "\n"
+		}
+		content += registryBlock
+	}
+
+	tmpFile, err := os.CreateTemp("", "hubfly-buildkitd-*.toml")
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to create BuildKit config: %w", err)
+	}
+	if _, err := tmpFile.WriteString(content); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpFile.Name())
+		return "", nil, fmt.Errorf("failed to write BuildKit config: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpFile.Name())
+		return "", nil, fmt.Errorf("failed to close BuildKit config: %w", err)
+	}
+
+	cleanup := func() {
+		_ = os.Remove(tmpFile.Name())
+	}
+	return tmpFile.Name(), cleanup, nil
+}
+
+func normalizeRegistryHost(registry string) string {
+	registry = strings.TrimSpace(registry)
+	if registry == "" {
+		return ""
+	}
+	registry = strings.TrimPrefix(registry, "http://")
+	registry = strings.TrimPrefix(registry, "https://")
+	registry = strings.TrimSuffix(registry, "/")
+	if idx := strings.Index(registry, "/"); idx >= 0 {
+		registry = registry[:idx]
+	}
+	return strings.TrimSpace(registry)
+}
+
+func buildEphemeralBuildKitRunArgs(containerName, userNetwork, configPath string, cacheDir string, useLocalCache bool) []string {
 	args := []string{
 		"run", "-d", "--rm",
 		"--name", containerName,
 		"--privileged",
 		"--label", ephemeralBuildKitLabelKey + "=" + ephemeralBuildKitLabelValue,
 		"--network", userNetwork,
+	}
+	if useLocalCache && strings.TrimSpace(cacheDir) != "" {
+		args = append(args, "-v", cacheDir+":"+cacheDir)
 	}
 	if strings.TrimSpace(configPath) != "" {
 		args = append(args, "-v", configPath+":"+ephemeralBuildKitConfigMountPath+":ro")
@@ -136,6 +224,9 @@ func (s *EphemeralBuildKit) Stop() error {
 	output, err := runDockerCommand("rm", "-f", s.ContainerName)
 	if err != nil && !isNoSuchContainerError(output) {
 		return fmt.Errorf("failed to remove container %q: %w", s.ContainerName, err)
+	}
+	if s.configCleanup != nil {
+		s.configCleanup()
 	}
 	return nil
 }
