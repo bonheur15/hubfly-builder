@@ -122,6 +122,8 @@ func detectPHPCommands(repoPath string, allowed *allowlist.AllowedCommands) (str
 func phpInstallCandidates(repoPath string) []string {
 	if repoPath != "" && fileExists(filepath.Join(repoPath, "composer.json")) {
 		return []string{
+			"COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction",
+			"COMPOSER_ALLOW_SUPERUSER=1 composer install",
 			"composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction",
 			"composer install",
 		}
@@ -258,6 +260,11 @@ func applyPHPPlanDefaults(appPath string, plan *buildPlan) error {
 		plan.Framework = framework
 	}
 
+	laravelInit := ""
+	if framework == "laravel" && hasWebEntrypoint {
+		laravelInit = laravelRuntimeInitCommand()
+	}
+
 	if strings.TrimSpace(plan.InstallCommand) == "" {
 		plan.InstallCommand = pickFirstNonEmpty(phpInstallCandidates(appPath))
 	}
@@ -278,8 +285,12 @@ func applyPHPPlanDefaults(appPath string, plan *buildPlan) error {
 
 	plan.RuntimeFlavor = detectPHPRuntimeFlavor(appPath, metadata, plan.Framework, plan.RunCommand)
 	plan.BuilderImage = selectPHPBaseImage(plan.Version, plan.RuntimeFlavor)
+	appEnv := "production"
+	if strings.HasPrefix(framework, "symfony") {
+		appEnv = "prod"
+	}
 	plan.RuntimeEnv = map[string]string{
-		"APP_ENV": "production",
+		"APP_ENV": appEnv,
 	}
 	plan.DocumentRoot = ""
 	plan.RuntimeInitCommand = strings.TrimSpace(plan.RuntimeInitCommand)
@@ -288,14 +299,12 @@ func applyPHPPlanDefaults(appPath string, plan *buildPlan) error {
 		if strings.TrimSpace(plan.RunCommand) == "" || strings.Contains(strings.ToLower(plan.RunCommand), "php-fpm") || strings.Contains(strings.ToLower(plan.RunCommand), "nginx") {
 			plan.RunCommand = "apache2-foreground"
 		}
-		plan.RuntimeInitCommand = defaultString(plan.RuntimeInitCommand, detectPHPRuntimeInitCommand(plan.ExposePort))
 		plan.RuntimeEnv["PORT"] = plan.ExposePort
 	} else if plan.RuntimeFlavor == "fpm" {
 		plan.DocumentRoot = docroot
 		if strings.TrimSpace(plan.RunCommand) == "" || strings.TrimSpace(plan.RunCommand) == "apache2-foreground" {
 			plan.RunCommand = detectPHPFPMRunCommand()
 		}
-		plan.RuntimeInitCommand = defaultString(plan.RuntimeInitCommand, detectPHPFPMRuntimeInitCommand(plan.ExposePort))
 		plan.RuntimeEnv["PORT"] = plan.ExposePort
 	} else {
 		if inferredPort := inferExposePort("", plan.RunCommand); inferredPort != "" {
@@ -306,6 +315,16 @@ func applyPHPPlanDefaults(appPath string, plan *buildPlan) error {
 		}
 	}
 	plan.AptPackages = detectPHPAptPackages(metadata)
+	if hasWebEntrypoint {
+		nodeBootstrap, nodeSetup, nodePackages := detectPHPNodeIntegration(appPath)
+		if len(nodePackages) > 0 {
+			for _, pkg := range nodePackages {
+				plan.AptPackages = appendUniqueString(plan.AptPackages, pkg)
+			}
+		}
+		plan.BootstrapCommands = mergeUniqueCommands(plan.BootstrapCommands, nodeBootstrap)
+		plan.SetupCommands = mergeUniqueCommands(plan.SetupCommands, nodeSetup)
+	}
 	if plan.RuntimeFlavor == "fpm" {
 		plan.AptPackages = appendUniqueString(plan.AptPackages, "nginx")
 	}
@@ -314,6 +333,14 @@ func applyPHPPlanDefaults(appPath string, plan *buildPlan) error {
 
 	if hasWebEntrypoint && plan.RuntimeFlavor == "cli" {
 		plan.ValidationWarnings = appendUniqueString(plan.ValidationWarnings, "php app has a web entrypoint; submitted run command overrides the default web runtime")
+	}
+
+	if plan.RuntimeFlavor == "apache" {
+		plan.RuntimeInitCommand = joinRuntimeInitCommands(laravelInit, plan.RuntimeInitCommand, detectPHPRuntimeInitCommand(plan.ExposePort))
+	} else if plan.RuntimeFlavor == "fpm" {
+		plan.RuntimeInitCommand = joinRuntimeInitCommands(laravelInit, plan.RuntimeInitCommand, detectPHPFPMRuntimeInitCommand(plan.ExposePort))
+	} else if laravelInit != "" && strings.TrimSpace(plan.RuntimeInitCommand) == "" {
+		plan.RuntimeInitCommand = laravelInit
 	}
 
 	return nil
@@ -467,4 +494,77 @@ func detectPHPFPMRuntimeInitCommand(port string) string {
 
 func detectPHPFPMRunCommand() string {
 	return "php-fpm -D && exec nginx -g 'daemon off;'"
+}
+
+func detectPHPNodeIntegration(appPath string) ([]string, []string, []string) {
+	if appPath == "" || !fileExists(filepath.Join(appPath, "package.json")) {
+		return nil, nil, nil
+	}
+
+	metadata := loadNodePackageJSON(appPath)
+	packageManager := detectNodePackageManager(appPath, metadata)
+	scripts := map[string]string{}
+	if metadata != nil && metadata.Scripts != nil {
+		scripts = metadata.Scripts
+	}
+
+	buildCandidates := nodeBuildCandidates(packageManager, scripts)
+	buildCommand := pickFirstNonEmpty(buildCandidates)
+	if buildCommand == "" {
+		return nil, nil, nil
+	}
+
+	installCommand := pickFirstNonEmpty(nodePrebuildCandidates(appPath, packageManager))
+	bootstrap := detectPHPNodeBootstrapCommands(packageManager, metadata)
+	setup := []string{}
+	if strings.TrimSpace(installCommand) != "" {
+		setup = append(setup, installCommand)
+	}
+	setup = append(setup, buildCommand)
+
+	return bootstrap, setup, []string{"nodejs", "npm"}
+}
+
+func detectPHPNodeBootstrapCommands(packageManager string, metadata *nodePackageJSON) []string {
+	spec := ""
+	if metadata != nil {
+		spec = strings.TrimSpace(metadata.PackageManager)
+	}
+	name, version := parsePackageManagerSpec(spec)
+	if name == "" {
+		name = packageManager
+	}
+	switch name {
+	case "pnpm", "yarn":
+		commands := []string{"corepack enable"}
+		if version != "" {
+			commands = append(commands, fmt.Sprintf("corepack prepare %s@%s --activate", name, version))
+		}
+		return commands
+	case "npm":
+		if version != "" {
+			return []string{fmt.Sprintf("npm install -g npm@%s", version)}
+		}
+	}
+	return nil
+}
+
+func laravelRuntimeInitCommand() string {
+	command := `if [ -d storage ]; then chmod -R 775 storage; fi; if [ -d bootstrap/cache ]; then chmod -R 775 bootstrap/cache; fi; if [ -f artisan ]; then if [ "${LARAVEL_STORAGE_LINK:-1}" = "1" ] && [ ! -e public/storage ]; then php artisan storage:link; fi; if [ "${LARAVEL_RUN_MIGRATIONS:-0}" = "1" ]; then php artisan migrate --force; fi; if [ "${LARAVEL_OPTIMIZE_ON_START:-0}" = "1" ]; then php artisan optimize; fi; fi`
+	return strings.TrimSpace(command)
+}
+
+func joinRuntimeInitCommands(commands ...string) string {
+	parts := make([]string, 0, len(commands))
+	for _, command := range commands {
+		command = strings.TrimSpace(command)
+		if command == "" {
+			continue
+		}
+		parts = append(parts, command)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "; ")
 }

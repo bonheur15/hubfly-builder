@@ -106,6 +106,15 @@ func detectBuildPlan(opts AutoDetectOptions, allowed *allowlist.AllowedCommands)
 			return buildPlan{}, err
 		}
 		return plan, nil
+	case "elixir":
+		plan, err := detectElixirBuildPlan(appDir, appPath, version, allowed)
+		if err != nil {
+			return buildPlan{}, err
+		}
+		if err := validateBuildPlanCommands(plan, allowed); err != nil {
+			return buildPlan{}, err
+		}
+		return plan, nil
 	case "php":
 		plan, err := detectPHPBuildPlan(appDir, appPath, version, allowed)
 		if err != nil {
@@ -133,6 +142,15 @@ func detectBuildPlan(opts AutoDetectOptions, allowed *allowlist.AllowedCommands)
 		plan, err := defaultBuildPlan(runtime, version, prebuild, build, run)
 		if err != nil {
 			return buildPlan{}, err
+		}
+		if runtime == "rust" {
+			plan.Framework = detectRustFramework(appPath)
+			if plan.Framework == "axum" || plan.Framework == "rocket" {
+				configureRustCargoChefPlan(&plan, appPath)
+			} else {
+				plan.PostBuildCommands = append(plan.PostBuildCommands, rustSelectBinaryCommand())
+				plan.RunCommand = "./app"
+			}
 		}
 		if runtime == "java" {
 			plan.PostBuildCommands = append(plan.PostBuildCommands, javaSelectJarCommand())
@@ -346,8 +364,10 @@ func defaultExposePort(runtime string) string {
 	switch runtime {
 	case "python":
 		return "8000"
-	case "go", "java", "php":
+	case "go", "java", "php", "rust":
 		return "8080"
+	case "elixir":
+		return "4000"
 	case "static":
 		return "8080"
 	default:

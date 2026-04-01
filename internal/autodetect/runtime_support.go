@@ -73,6 +73,40 @@ func detectPythonBuildPlan(appDir, appPath, version string, allowed *allowlist.A
 	return plan, nil
 }
 
+func detectElixirBuildPlan(appDir, appPath, version string, allowed *allowlist.AllowedCommands) (buildPlan, error) {
+	prebuild, build, run := detectElixirCommands(appPath, allowed)
+	plan, err := defaultBuildPlan("elixir", version, prebuild, build, run)
+	if err != nil {
+		return buildPlan{}, err
+	}
+
+	plan.BuildContextDir = appDir
+	plan.AppDir = appDir
+	if isPhoenixProject(appPath) {
+		plan.Framework = "phoenix"
+	}
+	if isDistilleryProject(appPath) {
+		plan.SetupCommands = mergeUniqueCommands(plan.SetupCommands, []string{
+			"mix local.rebar --force",
+			"MIX_ENV=prod mix deps.get",
+			"MIX_ENV=prod mix compile",
+			"MIX_ENV=prod mix phx.digest",
+		})
+	}
+	plan.ExposePort = inferExposePort(defaultExposePort(plan.Runtime), run)
+	plan.AptPackages = []string{"build-essential", "git"}
+	if plan.RuntimeEnv == nil {
+		plan.RuntimeEnv = map[string]string{}
+	}
+	if plan.Framework == "phoenix" {
+		plan.RuntimeEnv["PHX_SERVER"] = "true"
+	}
+	if strings.TrimSpace(plan.ExposePort) != "" {
+		plan.RuntimeEnv["PORT"] = plan.ExposePort
+	}
+	return plan, nil
+}
+
 func detectPythonSetupCommands(appPath string) []string {
 	deps := detectPythonDependencies(appPath)
 	if _, ok := deps["playwright"]; ok {
@@ -283,7 +317,9 @@ func isTrustedGeneratedCommand(command string) bool {
 		"yarn install --immutable",
 		"bun install --frozen-lockfile",
 		"python -m playwright install chromium",
-		javaSelectJarCommand():
+		javaSelectJarCommand(),
+		rustSelectBinaryCommand(),
+		laravelRuntimeInitCommand():
 		return true
 	}
 

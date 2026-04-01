@@ -47,6 +47,23 @@ func defaultBuildPlan(runtime, version, installCommand, buildCommand, runCommand
 			ExposePort:     "8000",
 			BuilderImage:   "python:" + version + "-slim",
 			RuntimeImage:   "python:" + version + "-slim",
+			RuntimeEnv: map[string]string{
+				"PYTHONUNBUFFERED": "1",
+			},
+		}, nil
+	case "elixir":
+		return buildPlan{
+			Runtime:        "elixir",
+			Version:        version,
+			InstallCommand: installCommand,
+			BuildCommand:   buildCommand,
+			RunCommand:     runCommand,
+			ExposePort:     "4000",
+			BuilderImage:   "elixir:" + version,
+			RuntimeImage:   "elixir:" + version,
+			RuntimeEnv: map[string]string{
+				"MIX_ENV": "prod",
+			},
 		}, nil
 	case "go":
 		return buildPlan{
@@ -58,6 +75,18 @@ func defaultBuildPlan(runtime, version, installCommand, buildCommand, runCommand
 			ExposePort:     "8080",
 			BuilderImage:   "golang:" + version + "-alpine",
 			RuntimeImage:   "alpine:3.20",
+		}, nil
+	case "rust":
+		return buildPlan{
+			Runtime:        "rust",
+			Version:        version,
+			InstallCommand: installCommand,
+			BuildCommand:   buildCommand,
+			RunCommand:     runCommand,
+			ExposePort:     "8080",
+			BuilderImage:   "rust:" + version + "-slim",
+			RuntimeImage:   "debian:bookworm-slim",
+			AptPackages:    []string{"ca-certificates"},
 		}, nil
 	case "bun":
 		return buildPlan{
@@ -362,6 +391,8 @@ func normalizeDependencyFiles(files []string) []string {
 func runtimeAptPackages(plan buildPlan) []string {
 	switch strings.TrimSpace(strings.ToLower(plan.Runtime)) {
 	case "python":
+		return plan.AptPackages
+	case "rust":
 		return plan.AptPackages
 	default:
 		return nil
