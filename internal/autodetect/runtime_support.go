@@ -25,7 +25,14 @@ var (
 	trustedPlaywrightPy     = regexp.MustCompile(`^python -m playwright install chromium$`)
 	trustedNextStartPattern = regexp.MustCompile(`^\.\/node_modules\/\.bin\/next start --hostname 0\.0\.0\.0 --port \$\{PORT:-\d{2,5}\}$`)
 	trustedNextSharpPattern = regexp.MustCompile(`^(npm install|pnpm add|yarn add|bun add) sharp$`)
+	trustedNestStartPattern = regexp.MustCompile(`^HOST=0\.0\.0\.0 PORT=\$\{PORT:-\d{2,5}\} node dist/main\.js$`)
 	trustedNuxtStartPattern = regexp.MustCompile(`^HOST=0\.0\.0\.0 PORT=\$\{PORT:-\d{2,5}\} node \.output/server/index\.mjs$`)
+	trustedAstroStartPattern = regexp.MustCompile(`^HOST=0\.0\.0\.0 PORT=\$\{PORT:-\d{2,5}\} node \./dist/server/entry\.mjs$`)
+	trustedRemixStartPattern = regexp.MustCompile(`^HOST=0\.0\.0\.0 PORT=\$\{PORT:-\d{2,5}\} node \./build/server/index\.js$`)
+	trustedAngularSSRPattern = regexp.MustCompile(`^if \[ -f '[^']+' \]; then HOST=0\.0\.0\.0 PORT=\$\{PORT:-\d{2,5}\} node '[^']+'; elif \[ -f '[^']+' \]; then HOST=0\.0\.0\.0 PORT=\$\{PORT:-\d{2,5}\} node '[^']+'; elif \[ -f '[^']+' \]; then HOST=0\.0\.0\.0 PORT=\$\{PORT:-\d{2,5}\} node '[^']+'; else HOST=0\.0\.0\.0 PORT=\$\{PORT:-\d{2,5}\} node '[^']+'; fi$`)
+	trustedNodeFileRunPattern = regexp.MustCompile(`^node (server|app|main)\.js$`)
+	trustedNodeDistRunPattern = regexp.MustCompile(`^node (dist/server|dist/main|build/server|build/index|build/handler)\.js$`)
+	trustedBunFileRunPattern  = regexp.MustCompile(`^bun (server|app)\.(ts|js)$`)
 	trustedPHPIniPattern    = regexp.MustCompile(`^if \[ -f "\$PHP_INI_DIR/php\.ini-production" \]; then cp "\$PHP_INI_DIR/php\.ini-production" "\$PHP_INI_DIR/php\.ini"; fi$`)
 	trustedPHPExtPattern    = regexp.MustCompile(`^docker-php-ext-install(?: [a-z0-9_]+)+$`)
 	trustedPHPExtEnable     = regexp.MustCompile(`^docker-php-ext-enable(?: [a-z0-9_]+)+$`)
@@ -332,7 +339,14 @@ func isTrustedGeneratedCommand(command string) bool {
 		trustedPlaywrightPy,
 		trustedNextStartPattern,
 		trustedNextSharpPattern,
+		trustedNestStartPattern,
 		trustedNuxtStartPattern,
+		trustedAstroStartPattern,
+		trustedRemixStartPattern,
+		trustedAngularSSRPattern,
+		trustedNodeFileRunPattern,
+		trustedNodeDistRunPattern,
+		trustedBunFileRunPattern,
 		trustedPHPIniPattern,
 		trustedPHPExtPattern,
 		trustedPHPExtEnable,

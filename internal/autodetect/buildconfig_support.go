@@ -227,9 +227,7 @@ func manualJavaScriptBuildPlan(repoRoot, appDir, appPath, runtime, version, buil
 		plan.ValidationWarnings = appendUniqueString(plan.ValidationWarnings, "Next.js app does not declare sharp; builder will install it for production image optimization")
 	}
 
-	if runtime != "bun" {
-		plan.RuntimeEnv["NODE_ENV"] = "production"
-	}
+	plan.RuntimeEnv["NODE_ENV"] = "production"
 	if detectJavaScriptPlaywright(ctx.AppMetadata) {
 		plan.SetupCommands = appendUniqueString(plan.SetupCommands, prefixCommand(ctx.appWorkDir, jsExecCommand(runtime, "playwright install chromium")))
 	}

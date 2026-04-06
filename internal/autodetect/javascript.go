@@ -204,10 +204,7 @@ func detectJavaScriptBuildPlan(repoRoot, appDir, appPath, runtime, version strin
 		plan.ExposePort = "4000"
 	}
 	plan.RuntimeEnv = map[string]string{"HOST": "0.0.0.0", "PORT": plan.ExposePort}
-
-	if ctx.Runtime != "bun" {
-		plan.RuntimeEnv["NODE_ENV"] = "production"
-	}
+	plan.RuntimeEnv["NODE_ENV"] = "production"
 
 	if packages := detectJavaScriptSystemPackages(ctx.AppMetadata); len(packages) > 0 {
 		plan.AptPackages = packages

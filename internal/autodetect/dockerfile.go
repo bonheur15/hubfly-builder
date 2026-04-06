@@ -98,8 +98,9 @@ func defaultBuildPlan(runtime, version, installCommand, buildCommand, runCommand
 			ExposePort:     "3000",
 			BuilderImage:   selectJavaScriptBuilderImage("bun", version),
 			RuntimeEnv: map[string]string{
-				"HOST": "0.0.0.0",
-				"PORT": "3000",
+				"HOST":     "0.0.0.0",
+				"PORT":     "3000",
+				"NODE_ENV": "production",
 			},
 		}, nil
 	case "java":

@@ -38,7 +38,7 @@ func packageManagerScriptCommand(packageManager, script string) string {
 	case "pnpm":
 		return "pnpm run " + script
 	case "yarn":
-		return "yarn " + script
+		return "yarn run " + script
 	case "bun":
 		return "bun run " + script
 	default:
