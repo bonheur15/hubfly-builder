@@ -214,6 +214,39 @@ func (s *Storage) GetPendingJob() (*BuildJob, error) {
 	return job, nil
 }
 
+func (s *Storage) GetPendingJobExcludingUsers(excludeUserIDs []string) (*BuildJob, error) {
+	job := &BuildJob{}
+
+	baseQuery := `
+		SELECT id, project_id, user_id, source_type, source_info, build_config, status, image_tag, started_at, finished_at, exit_code, retry_count, log_path, last_checkpoint, created_at, updated_at
+		FROM build_jobs
+		WHERE status = 'pending' AND TRIM(IFNULL(user_id, '')) != ''
+	`
+	var args []interface{}
+
+	if len(excludeUserIDs) > 0 {
+		baseQuery += " AND user_id NOT IN ("
+		for i, id := range excludeUserIDs {
+			if i > 0 {
+				baseQuery += ", "
+			}
+			baseQuery += "?"
+			args = append(args, id)
+		}
+		baseQuery += ")"
+	}
+
+	baseQuery += " ORDER BY created_at ASC LIMIT 1"
+
+	err := s.db.QueryRow(baseQuery, args...).Scan(&job.ID, &job.ProjectID, &job.UserID, &job.SourceType, &job.SourceInfo, &job.BuildConfig, &job.Status, &job.ImageTag, &job.StartedAt, &job.FinishedAt, &job.ExitCode, &job.RetryCount, &job.LogPath, &job.LastCheckpoint, &job.CreatedAt, &job.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	job.Env = cloneStringMap(job.BuildConfig.Env)
+
+	return job, nil
+}
+
 func (s *Storage) UpdateJobStatus(id, status string) error {
 	_, err := s.db.Exec(`UPDATE build_jobs SET status = ?, updated_at = ? WHERE id = ?`, status, time.Now(), id)
 	return err

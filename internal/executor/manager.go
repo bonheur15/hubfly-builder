@@ -3,6 +3,7 @@ package executor
 import (
 	"errors"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +23,7 @@ type Manager struct {
 	registry      string
 	maxConcurrent int
 	activeBuilds  map[string]bool
+	activeUsers   map[string]bool
 	mu            sync.Mutex
 	newJobSignal  chan struct{}
 }
@@ -35,6 +37,7 @@ func NewManager(storage *storage.Storage, logManager *logs.LogManager, allowlist
 		registry:      registry,
 		maxConcurrent: maxConcurrent,
 		activeBuilds:  make(map[string]bool),
+		activeUsers:   make(map[string]bool),
 		newJobSignal:  make(chan struct{}, 1),
 	}
 }
@@ -67,21 +70,32 @@ func (m *Manager) tryToDispatchJob() {
 		m.mu.Unlock()
 		return
 	}
+	excludeUserIDs := make([]string, 0, len(m.activeUsers))
+	for id := range m.activeUsers {
+		excludeUserIDs = append(excludeUserIDs, id)
+	}
 	m.mu.Unlock()
 
-	job, err := m.storage.GetPendingJob()
+	job, err := m.storage.GetPendingJobExcludingUsers(excludeUserIDs)
 	if err != nil {
+		return
+	}
+	if strings.TrimSpace(job.UserID) == "" {
+		log.Printf("ERROR: job %s missing userId; dropping", job.ID)
+		_ = m.storage.UpdateJobStatus(job.ID, "failed")
 		return
 	}
 
 	m.mu.Lock()
 	m.activeBuilds[job.ID] = true
+	m.activeUsers[job.UserID] = true
 	m.mu.Unlock()
 
 	if err := m.storage.UpdateJobStatus(job.ID, "claimed"); err != nil {
 		log.Printf("ERROR: could not update job status for %s: %v", job.ID, err)
 		m.mu.Lock()
 		delete(m.activeBuilds, job.ID)
+		delete(m.activeUsers, job.UserID)
 		m.mu.Unlock()
 		return
 	}
@@ -91,6 +105,7 @@ func (m *Manager) tryToDispatchJob() {
 		defer func() {
 			m.mu.Lock()
 			delete(m.activeBuilds, job.ID)
+			delete(m.activeUsers, job.UserID)
 			m.mu.Unlock()
 		}()
 

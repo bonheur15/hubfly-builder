@@ -70,15 +70,21 @@ func (s *Server) CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	job.BuildConfig.NormalizePhaseAliases()
 	log.Printf(
-		"CreateJob decoded: id=%s projectId=%s sourceType=%s repo=%s ref=%s workingDir=%q autoBuild=%t",
+		"CreateJob decoded: id=%s projectId=%s userId=%s sourceType=%s repo=%s ref=%s workingDir=%q autoBuild=%t",
 		job.ID,
 		job.ProjectID,
+		job.UserID,
 		job.SourceType,
 		sanitizeGitRepositoryURL(job.SourceInfo.GitRepository),
 		job.SourceInfo.Ref,
 		job.SourceInfo.WorkingDir,
 		job.BuildConfig.IsAutoBuild,
 	)
+	if strings.TrimSpace(job.UserID) == "" {
+		log.Printf("ERROR: job %s missing userId", job.ID)
+		http.Error(w, "userId is required", http.StatusBadRequest)
+		return
+	}
 	if strings.TrimSpace(job.BuildConfig.Network) == "" {
 		log.Printf("ERROR: job %s missing buildConfig.network", job.ID)
 		http.Error(w, "no user network provided", http.StatusBadRequest)
