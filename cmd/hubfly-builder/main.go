@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -14,8 +15,10 @@ import (
 	"hubfly-builder/internal/driver"
 	"hubfly-builder/internal/executor"
 	"hubfly-builder/internal/logs"
+	"hubfly-builder/internal/offline"
 	"hubfly-builder/internal/server"
 	"hubfly-builder/internal/storage"
+	"hubfly-builder/internal/uploadserver"
 )
 
 const maxConcurrentBuilds = 3
@@ -29,6 +32,7 @@ const (
 	defaultCacheBackend = "local"
 	defaultCacheDir     = "data/buildkit-cache"
 	defaultServerAddr   = ":10008"
+	defaultUploadAddr   = ":10011"
 )
 
 var version = "dev"
@@ -190,9 +194,18 @@ func pruneChildDirs(root string, retention time.Duration) {
 }
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "version" {
-		_, _ = io.WriteString(os.Stdout, version+"\n")
-		return
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "version":
+			_, _ = io.WriteString(os.Stdout, version+"\n")
+			return
+		case "offline":
+			if err := offline.Run(os.Args[2:]); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			return
+		}
 	}
 
 	applyDefaultEnvConfig()
@@ -258,6 +271,14 @@ func main() {
 
 	manager := executor.NewManager(storage, logManager, allowedCommands, apiClient, registry, maxConcurrentBuilds)
 	go manager.Start()
+
+	uploadServer := uploadserver.NewServer(callbackURL, registry)
+	go func() {
+		log.Printf("Image upload server listening on %s", defaultUploadAddr)
+		if err := uploadServer.Start(defaultUploadAddr); err != nil {
+			log.Fatalf("could not start image upload server: %s\n", err)
+		}
+	}()
 
 	server := server.NewServer(storage, logManager, manager, allowedCommands)
 
