@@ -1,41 +1,136 @@
-name: Release Go Binary
+name: Release
 
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            runner: ubuntu-latest
+            ext: tar.gz
+          - goos: linux
+            goarch: arm64
+            runner: ubuntu-24.04-arm
+            ext: tar.gz
+          - goos: darwin
+            goarch: amd64
+            runner: macos-15-intel
+            ext: tar.gz
+          - goos: darwin
+            goarch: arm64
+            runner: macos-14
+            ext: tar.gz
+          - goos: windows
+            goarch: amd64
+            runner: windows-latest
+            ext: zip
+
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          go-version: "1.21"
+          go-version-file: go.mod
 
-      - name: Build
-        run: go build -ldflags="-X main.version=${{ github.ref_name }}" -o hubfly-builder ./cmd/hubfly-builder
-
-      - name: Prepare Release Bundle
+      - name: Build artifact
+        shell: bash
         run: |
-          mkdir -p dist/configs
-          cp hubfly-builder dist/
-          cp configs/buildkitd.toml dist/configs/
-          cd dist
-          zip -r ../hubfly-builder-linux-amd64.zip hubfly-builder configs
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME}"
+          DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-      - name: Create or Update Release
+          BIN_NAME="hubfly-builder"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            BIN_NAME="hubfly-builder.exe"
+          fi
+
+          mkdir -p build dist stage/configs
+
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            go build \
+              -trimpath \
+              -ldflags "-s -w -X main.version=${VERSION}" \
+              -o "build/${BIN_NAME}" \
+              ./cmd/hubfly-builder
+
+          cp "build/${BIN_NAME}" "stage/${BIN_NAME}"
+          cp README.md stage/README.md
+          cp configs/buildkitd.toml stage/configs/buildkitd.toml
+
+          ASSET_NAME="hubfly-builder_${{ matrix.goos }}_${{ matrix.goarch }}.${{ matrix.ext }}"
+          export ASSET_NAME
+          export BIN_NAME
+          python <<'PY'
+            import hashlib
+            import os
+            import pathlib
+            import tarfile
+            import zipfile
+
+            asset_name = os.environ["ASSET_NAME"]
+            stage = pathlib.Path("stage")
+            dist = pathlib.Path("dist")
+            dist.mkdir(parents=True, exist_ok=True)
+            asset_path = dist / asset_name
+
+            if asset_name.endswith(".zip"):
+                with zipfile.ZipFile(asset_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                    for path in stage.rglob("*"):
+                        if path.is_file():
+                            zf.write(path, path.relative_to(stage))
+            else:
+                with tarfile.open(asset_path, "w:gz") as tf:
+                    for path in stage.rglob("*"):
+                        tf.add(path, arcname=path.relative_to(stage))
+
+            digest = hashlib.sha256(asset_path.read_bytes()).hexdigest()
+            (dist / f"{asset_name}.sha256").write_text(
+                f"{digest}  {asset_name}\n",
+                encoding="utf-8",
+            )
+            PY
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            dist/hubfly-builder_${{ matrix.goos }}_${{ matrix.goarch }}.${{ matrix.ext }}
+            dist/hubfly-builder_${{ matrix.goos }}_${{ matrix.goarch }}.${{ matrix.ext }}.sha256
+
+  release:
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Show release files
+        shell: bash
+        run: ls -lah dist
+
+      - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: Release ${{ github.ref_name }}
-          files: |
-            ./hubfly-builder-linux-amd64.zip
+          files: dist/*

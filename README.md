@@ -328,9 +328,17 @@ go mod download
 go build -o hubfly-builder ./cmd/hubfly-builder
 ```
 
-### Release Bundle
+### Release Bundles
 
-The GitHub release now publishes the raw `hubfly-builder` Linux binary and a stable `hubfly-builder-linux-amd64.zip` bundle. Extracting the zip places `hubfly-builder` at the archive root, alongside `README.md` and the `configs/` directory.
+The GitHub release publishes per-platform bundles:
+
+- `hubfly-builder_linux_amd64.tar.gz`
+- `hubfly-builder_linux_arm64.tar.gz`
+- `hubfly-builder_darwin_amd64.tar.gz`
+- `hubfly-builder_darwin_arm64.tar.gz`
+- `hubfly-builder_windows_amd64.zip`
+
+Each release asset also has a matching `.sha256` checksum file. Extracting a bundle places the `hubfly-builder` binary (or `hubfly-builder.exe` on Windows) at the archive root, alongside `README.md` and the `configs/` directory.
 
 ### Run The Server
 ```bash
