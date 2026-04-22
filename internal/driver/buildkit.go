@@ -1,6 +1,7 @@
 package driver
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -45,6 +46,10 @@ type BuildOpts struct {
 }
 
 func (bk *BuildKit) BuildCommand(opts BuildOpts) *exec.Cmd {
+	return bk.BuildCommandContext(context.Background(), opts)
+}
+
+func (bk *BuildKit) BuildCommandContext(ctx context.Context, opts BuildOpts) *exec.Cmd {
 	// Example: buildctl --addr <addr> build --frontend dockerfile.v0 --local context=. --local dockerfile=. --output type=docker,name=my-image,dest=/tmp/image.tar
 	args := []string{
 		"--addr", bk.Addr,
@@ -94,7 +99,7 @@ func (bk *BuildKit) BuildCommand(opts BuildOpts) *exec.Cmd {
 	} else {
 		args = append(args, "--output", fmt.Sprintf("type=docker,name=%s,dest=%s", opts.ImageTag, opts.ExportPath))
 	}
-	return exec.Command("buildctl", args...)
+	return exec.CommandContext(ctx, "buildctl", args...)
 }
 
 func normalizedCacheRefs(cacheRefs []string, legacyRef string) []string {

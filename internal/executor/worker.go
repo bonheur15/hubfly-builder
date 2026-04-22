@@ -2,11 +2,16 @@ package executor
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,6 +34,8 @@ var ErrBuildFailed = errors.New("build failed")
 const (
 	dockerPushMaxAttempts = 3
 	dockerPushRetryDelay  = 2 * time.Second
+	defaultBuildTimeout   = 15 * time.Minute
+	bandwidthAPIBaseURL   = "http://localhost:10006"
 )
 
 type Worker struct {
@@ -41,6 +48,8 @@ type Worker struct {
 	logFile    *os.File
 	logWriter  io.Writer
 	workDir    string
+	ctx        context.Context
+	cancel     context.CancelFunc
 }
 
 func NewWorker(job *storage.BuildJob, storage *storage.Storage, logManager *logs.LogManager, allowlist *allowlist.AllowedCommands, apiClient *api.Client, registry string) *Worker {
@@ -58,6 +67,8 @@ func (w *Worker) Run() error {
 	log.Printf("Starting build for job %s", w.job.ID)
 	w.job.BuildConfig.NormalizePhaseAliases()
 	w.job.StartedAt = sql.NullTime{Time: time.Now(), Valid: true}
+	w.ctx, w.cancel = context.WithTimeout(context.Background(), w.buildTimeout())
+	defer w.cancel()
 
 	logPath, logFile, err := w.logManager.CreateLogFile(w.job.ID)
 	if err != nil {
@@ -87,53 +98,60 @@ func (w *Worker) Run() error {
 	defer os.RemoveAll(w.workDir)
 	w.log("Created workspace: %s", w.workDir)
 
-	cloneCmd := exec.Command("git", "clone", w.job.SourceInfo.GitRepository, w.workDir)
+	requestedNetwork := strings.TrimSpace(w.job.BuildConfig.Network)
+	if requestedNetwork == "" {
+		w.log("ERROR: no user network provided")
+		return w.failJob("no user network provided")
+	}
+	w.applyNetworkBandwidth(requestedNetwork, 800, 800)
+
+	cloneCmd := w.execCommand("git", "clone", w.job.SourceInfo.GitRepository, w.workDir)
 	if err := w.executeCommand(cloneCmd); err != nil {
 		w.log("ERROR: failed to clone repository: %v", err)
-		return w.failJob("failed to clone repository")
+		return w.failForStep(err, "failed to clone repository")
 	}
 
 	var defaultBranch string
 	if w.job.SourceInfo.Ref == "" && w.job.SourceInfo.CommitSha == "" {
-		branchName, err := w.commandOutput(exec.Command("git", "-C", w.workDir, "rev-parse", "--abbrev-ref", "HEAD"))
+		branchName, err := w.commandOutput(w.execCommand("git", "-C", w.workDir, "rev-parse", "--abbrev-ref", "HEAD"))
 		if err == nil && branchName != "" && branchName != "HEAD" {
 			defaultBranch = branchName
 			w.log("Detected default branch: %s", defaultBranch)
 		}
 		w.log("No ref or commit specified; syncing to latest default branch HEAD")
-		if err := w.executeCommand(exec.Command("git", "-C", w.workDir, "fetch", "--prune", "origin")); err != nil {
+		if err := w.executeCommand(w.execCommand("git", "-C", w.workDir, "fetch", "--prune", "origin")); err != nil {
 			w.log("ERROR: failed to fetch latest commits: %v", err)
-			return w.failJob("failed to fetch latest commits")
+			return w.failForStep(err, "failed to fetch latest commits")
 		}
 		resetTarget := "origin/HEAD"
 		if defaultBranch != "" {
 			resetTarget = "origin/" + defaultBranch
 		}
-		if err := w.executeCommand(exec.Command("git", "-C", w.workDir, "reset", "--hard", resetTarget)); err != nil {
+		if err := w.executeCommand(w.execCommand("git", "-C", w.workDir, "reset", "--hard", resetTarget)); err != nil {
 			w.log("ERROR: failed to reset to %s: %v", resetTarget, err)
-			return w.failJob("failed to reset to latest commit")
+			return w.failForStep(err, "failed to reset to latest commit")
 		}
 	}
 
 	if w.job.SourceInfo.Ref != "" {
 		w.log("Checking out ref: %s", w.job.SourceInfo.Ref)
-		checkoutRefCmd := exec.Command("git", "-C", w.workDir, "checkout", w.job.SourceInfo.Ref)
+		checkoutRefCmd := w.execCommand("git", "-C", w.workDir, "checkout", w.job.SourceInfo.Ref)
 		if err := w.executeCommand(checkoutRefCmd); err != nil {
 			w.log("ERROR: failed to checkout ref %s: %v", w.job.SourceInfo.Ref, err)
-			return w.failJob("failed to checkout ref")
+			return w.failForStep(err, "failed to checkout ref")
 		}
 	}
 
 	if w.job.SourceInfo.CommitSha != "" {
 		w.log("Checking out commit SHA: %s", w.job.SourceInfo.CommitSha)
-		checkoutShaCmd := exec.Command("git", "-C", w.workDir, "checkout", w.job.SourceInfo.CommitSha)
+		checkoutShaCmd := w.execCommand("git", "-C", w.workDir, "checkout", w.job.SourceInfo.CommitSha)
 		if err := w.executeCommand(checkoutShaCmd); err != nil {
 			w.log("ERROR: failed to checkout commit %s: %v", w.job.SourceInfo.CommitSha, err)
-			return w.failJob("failed to checkout commit")
+			return w.failForStep(err, "failed to checkout commit")
 		}
 	}
 
-	if commitSHA, err := w.commandOutput(exec.Command("git", "-C", w.workDir, "rev-parse", "HEAD")); err == nil && commitSHA != "" {
+	if commitSHA, err := w.commandOutput(w.execCommand("git", "-C", w.workDir, "rev-parse", "HEAD")); err == nil && commitSHA != "" {
 		w.log("Checked out commit SHA: %s", commitSHA)
 	}
 
@@ -217,12 +235,6 @@ func (w *Worker) Run() error {
 	}
 	defer cleanupSecrets()
 
-	requestedNetwork := strings.TrimSpace(w.job.BuildConfig.Network)
-	if requestedNetwork == "" {
-		w.log("ERROR: no user network provided")
-		return w.failJob("no user network provided")
-	}
-
 	w.log("Starting ephemeral BuildKit daemon for network: %s", requestedNetwork)
 	limits := w.job.BuildConfig.ResourceLimits
 	useSoftLimits := limits.CPU > 0 || limits.MemoryMB > 0
@@ -232,7 +244,7 @@ func (w *Worker) Run() error {
 		cpuLimit = 2
 		memLimit = 4096
 	}
-	ephemeralSession, startErr := driver.StartEphemeralBuildKit(driver.EphemeralBuildKitOpts{
+	ephemeralSession, startErr := driver.StartEphemeralBuildKit(w.ctx, driver.EphemeralBuildKitOpts{
 		JobID:             w.job.ID,
 		UserNetwork:       requestedNetwork,
 		Registry:          w.registry,
@@ -245,7 +257,7 @@ func (w *Worker) Run() error {
 	})
 	if startErr != nil {
 		w.log("ERROR: failed to start ephemeral BuildKit daemon: %v", startErr)
-		return w.failJob("failed to start ephemeral BuildKit daemon")
+		return w.failForStep(startErr, "failed to start ephemeral BuildKit daemon")
 	}
 	defer func() {
 		if stopErr := ephemeralSession.Stop(); stopErr != nil {
@@ -302,9 +314,10 @@ func (w *Worker) Run() error {
 		}
 		if err := w.buildAndPushImage(activeBuildKit, opts); err != nil {
 			w.log("ERROR: host-managed image export/push failed: %v", err)
-			return w.failJob("failed to export and push built image")
+			return w.failForStep(err, "failed to export and push built image")
 		}
 		w.log("BuildKit build export and host push successful.")
+		w.applyNetworkBandwidth(requestedNetwork, 15, 15)
 		w.job.ImageTag = imageTag
 		if err := w.storage.UpdateJobImageTag(w.job.ID, imageTag); err != nil {
 			w.log("ERROR: could not update image tag: %v", err)
@@ -398,9 +411,10 @@ func (w *Worker) Run() error {
 		}
 		if err := w.buildAndPushImage(activeBuildKit, opts); err != nil {
 			w.log("ERROR: host-managed image export/push failed: %v", err)
-			return w.failJob("failed to export and push built image")
+			return w.failForStep(err, "failed to export and push built image")
 		}
 		w.log("BuildKit build export and host push successful.")
+		w.applyNetworkBandwidth(requestedNetwork, 15, 15)
 		w.job.ImageTag = imageTag
 		if err := w.storage.UpdateJobImageTag(w.job.ID, imageTag); err != nil {
 			w.log("ERROR: could not update image tag: %v", err)
@@ -437,6 +451,39 @@ func (w *Worker) succeedJob() error {
 func (w *Worker) log(format string, args ...interface{}) {
 	logLine := fmt.Sprintf(format, args...)
 	fmt.Fprintf(w.logWriter, "[%s] %s\n", time.Now().UTC().Format(time.RFC3339), logLine)
+}
+
+func (w *Worker) buildTimeout() time.Duration {
+	timeoutSeconds := w.job.BuildConfig.TimeoutSeconds
+	if timeoutSeconds <= 0 {
+		return defaultBuildTimeout
+	}
+	return time.Duration(timeoutSeconds) * time.Second
+}
+
+func (w *Worker) failForStep(err error, reason string) error {
+	if w.isTimeoutError(err) {
+		timeoutSeconds := int(w.buildTimeout() / time.Second)
+		return w.failJob(fmt.Sprintf("build timed out after %d seconds", timeoutSeconds))
+	}
+	return w.failJob(reason)
+}
+
+func (w *Worker) isTimeoutError(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	if w.ctx != nil && errors.Is(w.ctx.Err(), context.DeadlineExceeded) {
+		return true
+	}
+	return false
+}
+
+func (w *Worker) execCommand(name string, args ...string) *exec.Cmd {
+	if w.ctx == nil {
+		return exec.Command(name, args...)
+	}
+	return exec.CommandContext(w.ctx, name, args...)
 }
 
 func (w *Worker) executeCommand(cmd *exec.Cmd) error {
@@ -499,13 +546,13 @@ func (w *Worker) buildAndPushImage(activeBuildKit *driver.BuildKit, opts driver.
 	opts.ExportPath = exportPath
 
 	w.log("Exporting BuildKit image archive to host path: %s", exportPath)
-	buildCmd := activeBuildKit.BuildCommand(opts)
+	buildCmd := activeBuildKit.BuildCommandContext(w.ctx, opts)
 	if err := w.executeCommand(buildCmd); err != nil {
 		return fmt.Errorf("buildctl export failed: %w", err)
 	}
 
 	w.log("Loading exported image archive into host Docker daemon")
-	if err := w.executeCommand(exec.Command("docker", "load", "-i", exportPath)); err != nil {
+	if err := w.executeCommand(w.execCommand("docker", "load", "-i", exportPath)); err != nil {
 		return fmt.Errorf("docker load failed: %w", err)
 	}
 
@@ -528,7 +575,7 @@ func (w *Worker) buildAndPushImage(activeBuildKit *driver.BuildKit, opts driver.
 
 func (w *Worker) verifyLocalImageTag(imageTag string) error {
 	w.log("Verifying local Docker image tag exists: %s", imageTag)
-	if err := w.executeCommand(exec.Command("docker", "image", "inspect", imageTag)); err != nil {
+	if err := w.executeCommand(w.execCommand("docker", "image", "inspect", imageTag)); err != nil {
 		return fmt.Errorf("loaded Docker image %q is not available locally: %w", imageTag, err)
 	}
 	return nil
@@ -538,9 +585,12 @@ func (w *Worker) pushLocalImage(imageTag string) error {
 	var lastErr error
 	for attempt := 1; attempt <= dockerPushMaxAttempts; attempt++ {
 		w.log("Pushing image to registry from host daemon (attempt %d/%d): %s", attempt, dockerPushMaxAttempts, imageTag)
-		if err := w.executeCommand(exec.Command("docker", "push", imageTag)); err != nil {
+		if err := w.executeCommand(w.execCommand("docker", "push", imageTag)); err != nil {
 			lastErr = err
 			if attempt < dockerPushMaxAttempts {
+				if w.isTimeoutError(err) {
+					break
+				}
 				w.log("WARNING: docker push attempt %d failed for %s: %v", attempt, imageTag, err)
 				time.Sleep(dockerPushRetryDelay)
 				continue
@@ -560,6 +610,50 @@ func (w *Worker) removeLocalImage(imageTag string) error {
 		return err
 	}
 	return nil
+}
+
+func (w *Worker) applyNetworkBandwidth(networkName string, egressMbps, ingressMbps int) {
+	networkName = strings.TrimSpace(networkName)
+	if networkName == "" {
+		return
+	}
+
+	payload := struct {
+		EgressMbps  int `json:"egress_mbps"`
+		IngressMbps int `json:"ingress_mbps"`
+	}{
+		EgressMbps:  egressMbps,
+		IngressMbps: ingressMbps,
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		w.log("WARNING: failed to encode bandwidth payload for network %s: %v", networkName, err)
+		return
+	}
+
+	endpoint := fmt.Sprintf("%s/v1/networks/%s/bandwidth", strings.TrimRight(bandwidthAPIBaseURL, "/"), url.PathEscape(networkName))
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		w.log("WARNING: failed to create bandwidth request for network %s: %v", networkName, err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		w.log("WARNING: bandwidth update request failed for network %s: %v", networkName, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		w.log("WARNING: bandwidth update request for network %s returned status %d", networkName, resp.StatusCode)
+		return
+	}
+
+	w.log("Applied network bandwidth for %s: egress=%d ingress=%d", networkName, egressMbps, ingressMbps)
 }
 
 func (w *Worker) streamPipe(pipe io.Reader) {

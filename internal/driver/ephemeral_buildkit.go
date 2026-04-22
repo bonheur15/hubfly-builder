@@ -1,6 +1,7 @@
 package driver
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"os"
@@ -43,7 +44,7 @@ type EphemeralBuildKit struct {
 	configCleanup func()
 }
 
-func StartEphemeralBuildKit(opts EphemeralBuildKitOpts) (*EphemeralBuildKit, error) {
+func StartEphemeralBuildKit(ctx context.Context, opts EphemeralBuildKitOpts) (*EphemeralBuildKit, error) {
 	jobID := strings.TrimSpace(opts.JobID)
 	if jobID == "" {
 		return nil, fmt.Errorf("missing job id for ephemeral buildkit")
@@ -54,12 +55,12 @@ func StartEphemeralBuildKit(opts EphemeralBuildKitOpts) (*EphemeralBuildKit, err
 		return nil, fmt.Errorf("missing user network for ephemeral buildkit")
 	}
 
-	if err := ensureDockerNetworkExists(userNetwork); err != nil {
+	if err := ensureDockerNetworkExists(ctx, userNetwork); err != nil {
 		return nil, err
 	}
 
 	containerName := "hubfly-buildkit-" + sanitizeContainerName(jobID)
-	if err := forceRemoveContainer(containerName); err != nil {
+	if err := forceRemoveContainer(ctx, containerName); err != nil {
 		return nil, err
 	}
 
@@ -79,7 +80,7 @@ func StartEphemeralBuildKit(opts EphemeralBuildKitOpts) (*EphemeralBuildKit, err
 		}
 		cacheDir = absCacheDir
 	}
-	_, err = runDockerCommand(buildEphemeralBuildKitRunArgs(opts, containerName, buildKitConfigPath, cacheDir)...)
+	_, err = runDockerCommandContext(ctx, buildEphemeralBuildKitRunArgs(opts, containerName, buildKitConfigPath, cacheDir)...)
 	if err != nil {
 		if cleanupConfig != nil {
 			cleanupConfig()
@@ -100,13 +101,13 @@ func StartEphemeralBuildKit(opts EphemeralBuildKitOpts) (*EphemeralBuildKit, err
 		}
 	}()
 
-	addr, err := resolveBuildKitAddr(containerName, userNetwork)
+	addr, err := resolveBuildKitAddr(ctx, containerName, userNetwork)
 	if err != nil {
 		return nil, err
 	}
 	session.Addr = addr
 
-	if err := waitForBuildKitReady(addr); err != nil {
+	if err := waitForBuildKitReady(ctx, addr); err != nil {
 		return nil, err
 	}
 
@@ -285,8 +286,8 @@ func CleanupOrphanedEphemeralBuildKits() error {
 	return nil
 }
 
-func resolveBuildKitAddr(containerName, network string) (string, error) {
-	ip, err := inspectContainerIPAddress(containerName, network)
+func resolveBuildKitAddr(ctx context.Context, containerName, network string) (string, error) {
+	ip, err := inspectContainerIPAddress(ctx, containerName, network)
 	if err != nil {
 		return "", err
 	}
@@ -296,29 +297,32 @@ func resolveBuildKitAddr(containerName, network string) (string, error) {
 	return "tcp://" + ip + ":" + ephemeralBuildKitPort, nil
 }
 
-func inspectContainerIPAddress(containerName, network string) (string, error) {
+func inspectContainerIPAddress(ctx context.Context, containerName, network string) (string, error) {
 	format := fmt.Sprintf(`{{with index .NetworkSettings.Networks %q}}{{.IPAddress}}{{end}}`, network)
-	output, err := runDockerCommand("inspect", "--format", format, containerName)
+	output, err := runDockerCommandContext(ctx, "inspect", "--format", format, containerName)
 	if err != nil {
 		return "", fmt.Errorf("failed to inspect IP for container %q on network %q: %w", containerName, network, err)
 	}
 	return strings.TrimSpace(output), nil
 }
 
-func ensureDockerNetworkExists(name string) error {
-	_, err := runDockerCommand("network", "inspect", name)
+func ensureDockerNetworkExists(ctx context.Context, name string) error {
+	_, err := runDockerCommandContext(ctx, "network", "inspect", name)
 	if err != nil {
 		return fmt.Errorf("docker network %q not found or inaccessible: %w", name, err)
 	}
 	return nil
 }
 
-func waitForBuildKitReady(addr string) error {
+func waitForBuildKitReady(ctx context.Context, addr string) error {
 	deadline := time.Now().Add(ephemeralBuildKitReadinessTimeout)
 	var lastErr error
 
 	for time.Now().Before(deadline) {
-		cmd := exec.Command("buildctl", "--addr", addr, "debug", "workers")
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("buildkit daemon at %s readiness canceled: %w", addr, err)
+		}
+		cmd := exec.CommandContext(ctx, "buildctl", "--addr", addr, "debug", "workers")
 		if err := cmd.Run(); err == nil {
 			return nil
 		} else {
@@ -333,8 +337,8 @@ func waitForBuildKitReady(addr string) error {
 	return fmt.Errorf("buildkit daemon at %s is not ready: %w", addr, lastErr)
 }
 
-func forceRemoveContainer(name string) error {
-	output, err := runDockerCommand("rm", "-f", name)
+func forceRemoveContainer(ctx context.Context, name string) error {
+	output, err := runDockerCommandContext(ctx, "rm", "-f", name)
 	if err != nil && !isNoSuchContainerError(output) {
 		return fmt.Errorf("failed to remove existing container %q: %w", name, err)
 	}
@@ -364,7 +368,11 @@ func splitLines(value string) []string {
 }
 
 func runDockerCommand(args ...string) (string, error) {
-	cmd := exec.Command("docker", args...)
+	return runDockerCommandContext(context.Background(), args...)
+}
+
+func runDockerCommandContext(ctx context.Context, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "docker", args...)
 	output, err := cmd.CombinedOutput()
 	trimmed := strings.TrimSpace(string(output))
 	if err != nil {
