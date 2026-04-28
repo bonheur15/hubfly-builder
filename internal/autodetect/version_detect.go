@@ -317,7 +317,7 @@ func defaultDetectedVersionForRuntime(runtime string) string {
 	case "node":
 		return "22"
 	case "python":
-		return "3.9"
+		return "3.14.4"
 	case "elixir":
 		return "1.17"
 	case "go":

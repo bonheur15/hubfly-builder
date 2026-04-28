@@ -83,7 +83,7 @@ When `isAutoBuild` is set to `true`, the builder inspects the repository root (o
 | **Bun** | `bun.lock` | `oven/bun:1.2` |
 | **Node.js** | `package.json` | `node:18-alpine` |
 | **Go** | `go.mod` | `golang:1.18-alpine` |
-| **Python** | `requirements.txt`, `pyproject.toml`, `setup.py`, `Pipfile` | `python:3.9-slim` |
+| **Python** | `requirements.txt`, `pyproject.toml`, `setup.py`, `Pipfile` | `python:3.14.4-slim` |
 | **Java** | `pom.xml`, `build.gradle`, `build.gradle.kts` | `maven:3.9-eclipse-temurin-17` / `gradle:8-jdk17` |
 | **Static** | `index.html` | `nginx:alpine` |
 | **PHP** | `composer.json` | `php:8.3-apache` / `php:8.3-fpm` / `php:8.3-cli` |

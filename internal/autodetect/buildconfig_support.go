@@ -216,7 +216,7 @@ func manualJavaScriptBuildPlan(repoRoot, appDir, appPath, runtime, version, buil
 		RuntimeEnv: map[string]string{
 			"HOST": "0.0.0.0",
 		},
-	AptPackages: nil,
+		AptPackages: nil,
 		appWorkDir:  ctx.appWorkDir,
 	}
 	if canInstallWithoutFullSource(ctx) {
@@ -515,7 +515,7 @@ func defaultVersionForRuntime(runtime string) string {
 	case "node":
 		return "22"
 	case "python":
-		return "3.9"
+		return "3.14.4"
 	case "go":
 		return "1.18"
 	case "rust":
