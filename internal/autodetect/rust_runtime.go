@@ -9,7 +9,7 @@ import (
 func rustSelectBinaryCommand(binaryName string) string {
 	binaryName = strings.TrimSpace(binaryName)
 	if binaryName != "" {
-		command := fmt.Sprintf(`set -e; for candidate in %q %q; do if [ -f "$candidate" ] && [ -x "$candidate" ]; then cp "$candidate" /app/app; exit 0; fi; done; echo "Rust binary not found: %s"; exit 1`, "target/release/"+binaryName, "target/release/"+strings.ReplaceAll(binaryName, "-", "_"), escapeDoubleQuotes(binaryName))
+		command := fmt.Sprintf(`set -e; For candidate in %q %q; do if [ -f "$candidate" ] && [ -x "$candidate" ]; then cp "$candidate" /app/app; exit 0; fi; done; echo "Rust binary not found: %s"; exit 1`, "target/release/"+binaryName, "target/release/"+strings.ReplaceAll(binaryName, "-", "_"), escapeDoubleQuotes(binaryName))
 		return strings.TrimSpace(command)
 	}
 	command := `set -e; bin=""; for f in target/release/*; do if [ -f "$f" ] && [ -x "$f" ]; then case "$f" in *.d|*.rlib) continue ;; esac; bin="$f"; break; fi; done; if [ -z "$bin" ]; then echo "No runnable binary found"; exit 1; fi; cp "$bin" /app/app`
