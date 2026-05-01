@@ -79,28 +79,52 @@ func detectPythonBuildPlan(appDir, appPath, version string, allowed *allowlist.A
 	plan.ExposePort = inferExposePort(plan.ExposePort, run)
 	plan.AptPackages = detectPythonSystemPackages(appPath)
 	plan.SetupCommands = detectPythonSetupCommands(appPath)
-	if shouldUseSimpleFastAPIDockerfile(plan) {
-		plan.BuilderImage = "python:" + version + "-alpine"
+	if plan.Framework == "django" {
+		if strings.TrimSpace(plan.RuntimeInitCommand) == "" {
+			plan.RuntimeInitCommand = djangoRuntimeInitCommand(djangoSupportsCollectstatic(appPath))
+		}
+		plan.ValidationWarnings = appendUniqueString(plan.ValidationWarnings, "Django startup hooks are opt-in: set DJANGO_RUN_MIGRATIONS=1 to run migrations at container start. The database must be reachable from the container.")
+		if djangoSupportsCollectstatic(appPath) {
+			plan.ValidationWarnings = appendUniqueString(plan.ValidationWarnings, "Django collectstatic is opt-in: set DJANGO_RUN_COLLECTSTATIC=1 to run collectstatic at container start. STATIC_ROOT should be configured.")
+		}
+	}
+	if shouldUseSimplePythonWebDockerfile(plan) || shouldUseSimpleFlaskDockerfile(plan) {
+		plan.BuilderImage = selectSimplePythonBaseImage(version, detectPythonDependencies(appPath))
 		plan.RuntimeImage = plan.BuilderImage
 	}
 	return plan, nil
 }
 
 func detectPythonFramework(appPath string) string {
-	if detectFastAPIRunCommand(appPath) != "" {
-		return "fastapi"
+	if fileExists(filepath.Join(appPath, "manage.py")) {
+		return "django"
 	}
-	if detectGunicornRunCommand(appPath) != "" {
+	if framework, _ := detectASGIFrameworkRunCommand(appPath); framework != "" {
+		return framework
+	}
+	if run := detectGunicornRunCommand(appPath); run != "" {
+		if strings.Contains(run, ":application") {
+			return "wsgi"
+		}
 		return "flask"
+	}
+	if detectASGIApplicationRunCommand(appPath) != "" {
+		return "asgi"
 	}
 	return ""
 }
 
-func shouldUseSimpleFastAPIDockerfile(plan buildPlan) bool {
-	if strings.TrimSpace(strings.ToLower(plan.Framework)) != "fastapi" {
+func shouldUseSimplePythonWebDockerfile(plan buildPlan) bool {
+	switch strings.TrimSpace(strings.ToLower(plan.Framework)) {
+	case "fastapi", "starlette", "quart", "sanic", "litestar", "falcon-asgi":
+	default:
 		return false
 	}
 	if strings.TrimSpace(plan.InstallCommand) != "pip install -r requirements.txt" {
+		return false
+	}
+	run := strings.TrimSpace(plan.RunCommand)
+	if !strings.HasPrefix(run, "uvicorn ") && !strings.HasPrefix(run, "hypercorn ") {
 		return false
 	}
 	return len(plan.AptPackages) == 0 && len(plan.SetupCommands) == 0 && strings.TrimSpace(plan.BuildCommand) == ""
@@ -245,14 +269,14 @@ func detectPythonDependencies(appPath string) map[string]struct{} {
 		}
 	}
 
-	for _, fileName := range []string{"pyproject.toml", "setup.py"} {
+	for _, fileName := range []string{"requirements.in", "poetry.lock", "pyproject.toml", "setup.py"} {
 		path := filepath.Join(appPath, fileName)
 		data, err := os.ReadFile(path)
 		if err != nil {
 			continue
 		}
 		lower := strings.ToLower(string(data))
-		for _, name := range []string{"playwright", "psycopg2", "psycopg", "psycopg2-binary", "mysqlclient", "pillow", "lxml", "cryptography", "pyopenssl"} {
+		for _, name := range []string{"playwright", "psycopg2", "psycopg", "psycopg2-binary", "mysqlclient", "pillow", "lxml", "cryptography", "pyopenssl", "numpy", "pandas", "scipy", "scikit-learn", "matplotlib", "pyarrow"} {
 			if strings.Contains(lower, name) {
 				deps[name] = struct{}{}
 			}
@@ -260,6 +284,57 @@ func detectPythonDependencies(appPath string) map[string]struct{} {
 	}
 
 	return deps
+}
+
+func selectSimplePythonBaseImage(version string, deps map[string]struct{}) string {
+	if pythonHasCompiledDeps(deps) {
+		return "python:" + version + "-slim"
+	}
+	return "python:" + version + "-alpine"
+}
+
+func pythonHasCompiledDeps(deps map[string]struct{}) bool {
+	return hasPythonDependency(deps,
+		"cryptography",
+		"lxml",
+		"matplotlib",
+		"mysqlclient",
+		"numpy",
+		"pandas",
+		"pillow",
+		"playwright",
+		"psycopg",
+		"psycopg2",
+		"psycopg2-binary",
+		"pyarrow",
+		"pyopenssl",
+		"scikit-learn",
+		"scipy",
+	)
+}
+
+func djangoRuntimeInitCommand(includeCollectstatic bool) string {
+	commands := []string{
+		`if [ "${DJANGO_RUN_MIGRATIONS:-0}" = "1" ]; then python manage.py migrate --noinput; fi`,
+	}
+	if includeCollectstatic {
+		commands = append(commands, `if [ "${DJANGO_RUN_COLLECTSTATIC:-0}" = "1" ]; then python manage.py collectstatic --noinput; fi`)
+	}
+	return joinRuntimeInitCommands(commands...)
+}
+
+func djangoSupportsCollectstatic(appPath string) bool {
+	for _, path := range findPythonModuleFiles(appPath, "settings.py") {
+		content, err := os.ReadFile(filepath.Join(appPath, path))
+		if err != nil {
+			continue
+		}
+		lower := strings.ToLower(string(content))
+		if strings.Contains(lower, "django.contrib.staticfiles") || strings.Contains(lower, "static_url") || strings.Contains(lower, "static_root") {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizePythonDependencyName(line string) string {
@@ -400,6 +475,11 @@ func isTrustedGeneratedCommand(command string) bool {
 		if pattern.MatchString(command) {
 			return true
 		}
+	}
+
+	switch command {
+	case djangoRuntimeInitCommand(false), djangoRuntimeInitCommand(true):
+		return true
 	}
 
 	return false

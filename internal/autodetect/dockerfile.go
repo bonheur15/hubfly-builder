@@ -530,8 +530,8 @@ func runtimePruneCommand(plan buildPlan) string {
 }
 
 func renderPythonDockerfile(plan buildPlan, buildArgKeys, secretBuildKeys []string) string {
-	if shouldUseSimpleFastAPIDockerfile(plan) {
-		return renderSimpleFastAPIDockerfile(plan, buildArgKeys, secretBuildKeys)
+	if shouldUseSimplePythonWebDockerfile(plan) {
+		return renderSimplePythonWebDockerfile(plan, buildArgKeys, secretBuildKeys)
 	}
 	if shouldUseSimpleFlaskDockerfile(plan) {
 		return renderSimpleFlaskDockerfile(plan, buildArgKeys, secretBuildKeys)
@@ -607,7 +607,7 @@ func renderPythonDockerfile(plan buildPlan, buildArgKeys, secretBuildKeys []stri
 	return builder.String()
 }
 
-func renderSimpleFastAPIDockerfile(plan buildPlan, buildArgKeys, secretBuildKeys []string) string {
+func renderSimplePythonWebDockerfile(plan buildPlan, buildArgKeys, secretBuildKeys []string) string {
 	var builder strings.Builder
 	builderImage := strings.TrimSpace(plan.BuilderImage)
 	fmt.Fprintf(&builder, "FROM %s\n\n", builderImage)
@@ -642,7 +642,11 @@ func renderSimpleFastAPIDockerfile(plan buildPlan, buildArgKeys, secretBuildKeys
 
 func renderSimpleFlaskDockerfile(plan buildPlan, buildArgKeys, secretBuildKeys []string) string {
 	var builder strings.Builder
-	builder.WriteString("FROM python:3\n\n")
+	builderImage := strings.TrimSpace(plan.BuilderImage)
+	if builderImage == "" {
+		builderImage = "python:3-slim"
+	}
+	fmt.Fprintf(&builder, "FROM %s\n\n", builderImage)
 	builder.WriteString("ENV PYTHONUNBUFFERED=1\n\n")
 	builder.WriteString("WORKDIR /app\n\n")
 

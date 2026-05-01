@@ -289,8 +289,24 @@ func manualRuntimeBuildPlan(appPath, runtime, version, appDir, buildContextDir s
 
 	switch runtime {
 	case "python":
+		if strings.TrimSpace(plan.Framework) == "" {
+			plan.Framework = detectPythonFramework(appPath)
+		}
 		plan.AptPackages = detectPythonSystemPackages(appPath)
 		plan.SetupCommands = mergeUniqueCommands(detectPythonSetupCommands(appPath), plan.SetupCommands)
+		if strings.TrimSpace(cfg.RuntimeInitCommand) == "" && plan.Framework == "django" {
+			plan.RuntimeInitCommand = djangoRuntimeInitCommand(djangoSupportsCollectstatic(appPath))
+		}
+		if plan.Framework == "django" {
+			plan.ValidationWarnings = appendUniqueString(plan.ValidationWarnings, "Django startup hooks are opt-in: set DJANGO_RUN_MIGRATIONS=1 to run migrations at container start. The database must be reachable from the container.")
+			if djangoSupportsCollectstatic(appPath) {
+				plan.ValidationWarnings = appendUniqueString(plan.ValidationWarnings, "Django collectstatic is opt-in: set DJANGO_RUN_COLLECTSTATIC=1 to run collectstatic at container start. STATIC_ROOT should be configured.")
+			}
+		}
+		if (shouldUseSimplePythonWebDockerfile(plan) || shouldUseSimpleFlaskDockerfile(plan)) && len(plan.AptPackages) == 0 && len(plan.SetupCommands) == 0 && strings.TrimSpace(plan.BuildCommand) == "" {
+			plan.BuilderImage = selectSimplePythonBaseImage(version, detectPythonDependencies(appPath))
+			plan.RuntimeImage = plan.BuilderImage
+		}
 	case "elixir":
 		if plan.RuntimeEnv == nil {
 			plan.RuntimeEnv = map[string]string{"MIX_ENV": "prod"}

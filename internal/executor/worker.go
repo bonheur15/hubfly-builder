@@ -168,10 +168,32 @@ func (w *Worker) Run() error {
 
 	buildContextDir := appDir
 	buildContext := appPath
-	dockerfilePath, dockerfileContextDir := detectDockerfileLayout(w.workDir, appDir)
-	hasExistingDockerfile := dockerfilePath != ""
-	if dockerfilePath != "" {
-		buildContextDir = dockerfileContextDir
+	customDockerfile := w.job.BuildConfig.CustomDockerfileBytes()
+	dockerfilePath := ""
+	hasCustomDockerfile := len(customDockerfile) > 0
+	hasExistingDockerfile := false
+	if hasCustomDockerfile {
+		w.log("Using custom Dockerfile from build request.")
+		dockerfilePath = filepath.Join(buildContext, "Dockerfile")
+		if err := os.WriteFile(dockerfilePath, customDockerfile, 0644); err != nil {
+			w.log("ERROR: failed to stage custom Dockerfile at %s: %v", dockerfilePath, err)
+			return w.failJob("failed to stage custom Dockerfile")
+		}
+		hasExistingDockerfile = true
+	} else {
+		var dockerfileContextDir string
+		dockerfilePath, dockerfileContextDir = detectDockerfileLayout(w.workDir, appDir)
+		hasExistingDockerfile = dockerfilePath != ""
+		if dockerfilePath != "" {
+			buildContextDir = dockerfileContextDir
+			buildContext, err = resolveBuildContextPath(w.workDir, buildContextDir)
+			if err != nil {
+				w.log("ERROR: invalid build context %q: %v", buildContextDir, err)
+				return w.failJob("invalid build context")
+			}
+		}
+	}
+	if hasCustomDockerfile {
 		buildContext, err = resolveBuildContextPath(w.workDir, buildContextDir)
 		if err != nil {
 			w.log("ERROR: invalid build context %q: %v", buildContextDir, err)
@@ -268,7 +290,11 @@ func (w *Worker) Run() error {
 	activeBuildKit := driver.NewBuildKit(ephemeralSession.Addr)
 
 	if hasExistingDockerfile {
-		w.log("Dockerfile found in context, starting BuildKit build...")
+		if hasCustomDockerfile {
+			w.log("Custom Dockerfile staged in context, starting BuildKit build...")
+		} else {
+			w.log("Dockerfile found in context, starting BuildKit build...")
+		}
 
 		audit := autodetect.AuditDockerfileWithOptions(autodetect.AutoDetectOptions{
 			RepoRoot:   w.workDir,
@@ -286,7 +312,9 @@ func (w *Worker) Run() error {
 		w.job.BuildConfig.BuildContextDir = buildContextDir
 		w.job.BuildConfig.AppDir = appDir
 		w.job.BuildConfig.ValidationWarnings = mergeWarnings(w.job.BuildConfig.ValidationWarnings, audit.Warnings)
-		if content, readErr := os.ReadFile(dockerfilePath); readErr == nil {
+		if hasCustomDockerfile {
+			w.job.BuildConfig.DockerfileContent = customDockerfile
+		} else if content, readErr := os.ReadFile(dockerfilePath); readErr == nil {
 			w.job.BuildConfig.DockerfileContent = content
 		}
 		if err := w.storage.UpdateJobBuildConfig(w.job.ID, &w.job.BuildConfig); err != nil {
