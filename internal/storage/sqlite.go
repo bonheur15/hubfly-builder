@@ -81,7 +81,7 @@ func (a *SourceInfo) Scan(value interface{}) error {
 
 type ResourceLimits struct {
 	CPU      float64 `json:"cpu"`
-	MemoryMB int `json:"memoryMB"`
+	MemoryMB int     `json:"memoryMB"`
 }
 
 type EnvOverride struct {
@@ -118,6 +118,7 @@ type BuildConfig struct {
 	Env                map[string]string      `json:"env,omitempty"`
 	EnvOverrides       map[string]EnvOverride `json:"envOverrides,omitempty"`
 	ResolvedEnvPlan    []ResolvedEnvVar       `json:"resolvedEnvPlan,omitempty"`
+	CustomDockerfile   string                 `json:"customDockerfile,omitempty"`
 	DockerfileContent  []byte                 `json:"dockerfileContent,omitempty"`
 }
 
@@ -148,6 +149,13 @@ func (a *BuildConfig) NormalizePhaseAliases() {
 	if strings.TrimSpace(a.PrebuildCommand) == "" {
 		a.PrebuildCommand = strings.TrimSpace(a.InstallCommand)
 	}
+}
+
+func (a BuildConfig) CustomDockerfileBytes() []byte {
+	if strings.TrimSpace(a.CustomDockerfile) == "" {
+		return nil
+	}
+	return []byte(a.CustomDockerfile)
 }
 
 type BuildJob struct {

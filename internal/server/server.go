@@ -153,8 +153,50 @@ func (s *Server) CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		customDockerfile := job.BuildConfig.CustomDockerfileBytes()
 		dockerfilePath, buildContextDir := detectDockerfileLayout(tempDir, appDir)
-		if dockerfilePath != "" {
+		if len(customDockerfile) > 0 {
+			buildContextDir = appDir
+			buildContextPath, err := resolveBuildContextPath(tempDir, buildContextDir)
+			if err != nil {
+				log.Printf("ERROR: job %s invalid custom Dockerfile build context %q: %v", job.ID, buildContextDir, err)
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			dockerfilePath = filepath.Join(buildContextPath, "Dockerfile")
+			if err := os.WriteFile(dockerfilePath, customDockerfile, 0644); err != nil {
+				log.Printf("ERROR: job %s failed to stage custom Dockerfile path=%s: %v", job.ID, dockerfilePath, err)
+				http.Error(w, "failed to stage custom Dockerfile", http.StatusBadRequest)
+				return
+			}
+
+			audit := autodetect.AuditDockerfileWithOptions(autodetect.AutoDetectOptions{
+				RepoRoot:   tempDir,
+				WorkingDir: appDir,
+			}, dockerfilePath)
+			if len(audit.Errors) > 0 {
+				http.Error(w, strings.Join(audit.Errors, "; "), http.StatusBadRequest)
+				return
+			}
+
+			runtime, version := autodetect.DetectRuntimeWithContext(tempDir, inspectDir)
+			job.BuildConfig = storage.BuildConfig{
+				IsAutoBuild:        true,
+				Runtime:            runtime,
+				Version:            version,
+				BuildContextDir:    buildContextDir,
+				AppDir:             appDir,
+				ValidationWarnings: audit.Warnings,
+				Network:            job.BuildConfig.Network,
+				TimeoutSeconds:     job.BuildConfig.TimeoutSeconds,
+				ResourceLimits:     job.BuildConfig.ResourceLimits,
+				Env:                job.BuildConfig.Env,
+				EnvOverrides:       job.BuildConfig.EnvOverrides,
+				ResolvedEnvPlan:    job.BuildConfig.ResolvedEnvPlan,
+				CustomDockerfile:   job.BuildConfig.CustomDockerfile,
+				DockerfileContent:  customDockerfile,
+			}
+		} else if dockerfilePath != "" {
 			audit := autodetect.AuditDockerfileWithOptions(autodetect.AutoDetectOptions{
 				RepoRoot:   tempDir,
 				WorkingDir: appDir,
@@ -185,6 +227,7 @@ func (s *Server) CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 				Env:                job.BuildConfig.Env,
 				EnvOverrides:       job.BuildConfig.EnvOverrides,
 				ResolvedEnvPlan:    job.BuildConfig.ResolvedEnvPlan,
+				CustomDockerfile:   job.BuildConfig.CustomDockerfile,
 				DockerfileContent:  dockerfileContent,
 			}
 		} else {
@@ -225,6 +268,7 @@ func (s *Server) CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 				Env:                job.BuildConfig.Env,
 				EnvOverrides:       job.BuildConfig.EnvOverrides,
 				ResolvedEnvPlan:    job.BuildConfig.ResolvedEnvPlan,
+				CustomDockerfile:   job.BuildConfig.CustomDockerfile,
 				DockerfileContent:  detectedConfig.DockerfileContent,
 			}
 		}

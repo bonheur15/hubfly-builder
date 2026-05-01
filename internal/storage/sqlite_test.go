@@ -3,6 +3,7 @@ package storage
 import (
 	"encoding/json"
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -63,5 +64,19 @@ func TestBuildJobUnmarshalAcceptsIntegerCPU(t *testing.T) {
 	}
 	if job.BuildConfig.ResourceLimits.MemoryMB != 256 {
 		t.Fatalf("expected memory 256, got %d", job.BuildConfig.ResourceLimits.MemoryMB)
+	}
+}
+
+func TestBuildConfigCustomDockerfileAcceptsPlainJSONText(t *testing.T) {
+	payload := []byte(`{"customDockerfile":"FROM busybox\nCMD [\"true\"]\n"}`)
+
+	var cfg BuildConfig
+	if err := json.Unmarshal(payload, &cfg); err != nil {
+		t.Fatalf("failed to unmarshal build config: %v", err)
+	}
+
+	content := string(cfg.CustomDockerfileBytes())
+	if !strings.Contains(content, "FROM busybox") {
+		t.Fatalf("expected custom Dockerfile bytes to contain request content, got %q", content)
 	}
 }
