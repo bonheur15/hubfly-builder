@@ -187,6 +187,13 @@ func (w *Worker) Run() error {
 		hasExistingDockerfile = dockerfilePath != ""
 		if dockerfilePath != "" {
 			buildContextDir = dockerfileContextDir
+			if requestedContextDir := strings.TrimSpace(w.job.BuildConfig.BuildContextDir); requestedContextDir != "" {
+				buildContextDir, err = normalizeDockerfileBuildContextDir(requestedContextDir, appDir)
+				if err != nil {
+					w.log("ERROR: invalid Dockerfile build context %q for working directory %q: %v", requestedContextDir, appDir, err)
+					return w.failJob(err.Error())
+				}
+			}
 			buildContext, err = resolveBuildContextPath(w.workDir, buildContextDir)
 			if err != nil {
 				w.log("ERROR: invalid build context %q: %v", buildContextDir, err)
@@ -347,7 +354,7 @@ func (w *Worker) Run() error {
 
 		opts := driver.BuildOpts{
 			ContextPath:    buildContext,
-			DockerfilePath: buildContext,
+			DockerfilePath: filepath.Dir(dockerfilePath),
 			ImageTag:       imageTag,
 			BuildArgs:      buildArgs,
 			Secrets:        buildSecrets,
@@ -1061,11 +1068,33 @@ func resolveBuildContextPath(repoRoot, buildContextDir string) (string, error) {
 	return filepath.Join(repoRoot, cleaned), nil
 }
 
+func normalizeDockerfileBuildContextDir(buildContextDir, appDir string) (string, error) {
+	cleaned := filepath.Clean(strings.TrimSpace(buildContextDir))
+	if cleaned == "" || cleaned == "." {
+		cleaned = "."
+	}
+	if filepath.IsAbs(cleaned) || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("build context must stay within the repository root")
+	}
+
+	cleaned = filepath.ToSlash(cleaned)
+	appDir = strings.TrimSpace(appDir)
+	if appDir == "" {
+		appDir = "."
+	}
+	appDir = filepath.ToSlash(filepath.Clean(appDir))
+	if cleaned != "." && appDir != cleaned && !strings.HasPrefix(appDir, cleaned+"/") {
+		return "", fmt.Errorf("build context must contain the working directory")
+	}
+
+	return cleaned, nil
+}
+
 func detectDockerfileLayout(repoRoot, appDir string) (string, string) {
 	if appDir != "." {
 		appDockerfile := filepath.Join(repoRoot, filepath.FromSlash(appDir), "Dockerfile")
 		if info, err := os.Stat(appDockerfile); err == nil && info.Mode().IsRegular() {
-			return appDockerfile, appDir
+			return appDockerfile, "."
 		}
 	}
 

@@ -200,6 +200,20 @@ func (s *Server) CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 				DockerfileContent:  customDockerfile,
 			}
 		} else if dockerfilePath != "" {
+			if requestedContextDir := strings.TrimSpace(job.BuildConfig.BuildContextDir); requestedContextDir != "" {
+				buildContextDir, err = normalizeDockerfileBuildContextDir(requestedContextDir, appDir)
+				if err != nil {
+					log.Printf("ERROR: job %s invalid Dockerfile build context %q for appDir=%q: %v", job.ID, requestedContextDir, appDir, err)
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				if _, err := resolveBuildContextPath(tempDir, buildContextDir); err != nil {
+					log.Printf("ERROR: job %s invalid Dockerfile build context %q: %v", job.ID, buildContextDir, err)
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+			}
+
 			dockerfileContent, stageErr := dockerfileparams.Stage(dockerfilePath, job.BuildConfig.DockerfileArgs, job.BuildConfig.DockerfileEnv)
 			if stageErr != nil {
 				log.Printf("ERROR: job %s failed to stage Dockerfile request params path=%s: %v", job.ID, dockerfilePath, stageErr)
@@ -355,7 +369,7 @@ func detectDockerfileLayout(repoRoot, appDir string) (string, string) {
 	if appDir != "." {
 		appDockerfile := filepath.Join(repoRoot, filepath.FromSlash(appDir), "Dockerfile")
 		if info, err := os.Stat(appDockerfile); err == nil && info.Mode().IsRegular() {
-			return appDockerfile, appDir
+			return appDockerfile, "."
 		}
 	}
 
@@ -379,6 +393,28 @@ func resolveBuildContextPath(repoRoot, buildContextDir string) (string, error) {
 	}
 
 	return filepath.Join(repoRoot, cleaned), nil
+}
+
+func normalizeDockerfileBuildContextDir(buildContextDir, appDir string) (string, error) {
+	cleaned := filepath.Clean(strings.TrimSpace(buildContextDir))
+	if cleaned == "" || cleaned == "." {
+		cleaned = "."
+	}
+	if filepath.IsAbs(cleaned) || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("build context must stay within the repository root")
+	}
+
+	cleaned = filepath.ToSlash(cleaned)
+	appDir = strings.TrimSpace(appDir)
+	if appDir == "" {
+		appDir = "."
+	}
+	appDir = filepath.ToSlash(filepath.Clean(appDir))
+	if cleaned != "." && appDir != cleaned && !strings.HasPrefix(appDir, cleaned+"/") {
+		return "", fmt.Errorf("build context must contain the working directory")
+	}
+
+	return cleaned, nil
 }
 
 func mergeWarnings(primary []string, extras []string) []string {

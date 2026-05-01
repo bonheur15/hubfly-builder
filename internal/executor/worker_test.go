@@ -40,8 +40,32 @@ func TestDetectDockerfileLayoutPrefersAppDockerfile(t *testing.T) {
 	if path != filepath.Join(appDir, "Dockerfile") {
 		t.Fatalf("expected app Dockerfile path, got %q", path)
 	}
-	if ctx != "apps/web" {
-		t.Fatalf("expected app build context, got %q", ctx)
+	if ctx != "." {
+		t.Fatalf("expected root build context, got %q", ctx)
+	}
+}
+
+func TestNormalizeDockerfileBuildContextAllowsAncestorContext(t *testing.T) {
+	ctx, err := normalizeDockerfileBuildContextDir(".", "backend")
+	if err != nil {
+		t.Fatalf("expected root context to be allowed: %v", err)
+	}
+	if ctx != "." {
+		t.Fatalf("expected root context, got %q", ctx)
+	}
+
+	ctx, err = normalizeDockerfileBuildContextDir("services", "services/api")
+	if err != nil {
+		t.Fatalf("expected ancestor context to be allowed: %v", err)
+	}
+	if ctx != "services" {
+		t.Fatalf("expected services context, got %q", ctx)
+	}
+}
+
+func TestNormalizeDockerfileBuildContextRejectsSiblingContext(t *testing.T) {
+	if _, err := normalizeDockerfileBuildContextDir("frontend", "backend"); err == nil {
+		t.Fatalf("expected sibling context to be rejected")
 	}
 }
 

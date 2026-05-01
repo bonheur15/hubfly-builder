@@ -172,6 +172,12 @@ Creates a new build job and queues it for execution.
 - These fields are ignored for generated Dockerfiles and for `customDockerfile`.
 - Do not put secrets in `dockerfileEnv`; `ENV` values are baked into the resulting image.
 
+`buildConfig.buildContextDir` is optional for repository Dockerfiles:
+- By default, the Dockerfile build context is the repository root (`"."`), even when `sourceInfo.workingDir` points to a subdirectory Dockerfile.
+- Set it to a narrower ancestor directory when you want a smaller context.
+- The context must stay inside the repository and must contain `sourceInfo.workingDir`.
+- Use `.dockerignore` to keep a wider context isolated to only the files the Dockerfile needs.
+
 `buildConfig.customDockerfile` is optional:
 - Send plain Dockerfile text in this field to force the builder to use that Dockerfile.
 - A custom Dockerfile takes precedence over any `Dockerfile` committed in the repository.
