@@ -129,6 +129,7 @@ Creates a new build job and queues it for execution.
     "version": "1.2",
     "prebuildCommand": "bun install",
     "buildCommand": "bun run build",
+    "customDockerfile": "FROM node:22-alpine\nWORKDIR /app\nCOPY . .\nRUN npm ci\nCMD [\"npm\", \"start\"]\n",
     "network": "user123_net",
     "env": {
       "NEXT_PUBLIC_API_URL": "https://api.example.com",
@@ -159,6 +160,11 @@ Creates a new build job and queues it for execution.
 - If provided for a key, override values take precedence over auto-detection.
 - `scope` supports `build`, `runtime`, or `both`.
 - `secret` (`true`/`false`) forces whether the key is mounted as a build secret vs passed as build-arg when build scope is active.
+
+`buildConfig.customDockerfile` is optional:
+- Send plain Dockerfile text in this field to force the builder to use that Dockerfile.
+- A custom Dockerfile takes precedence over any `Dockerfile` committed in the repository.
+- The build context defaults to `sourceInfo.workingDir` when a custom Dockerfile is provided.
 
 `buildConfig.network` is required:
 - The worker starts an ephemeral `buildkitd` container for every job on the requested Docker network and uses that same network for builder-to-daemon communication.

@@ -74,6 +74,15 @@ func writeComposerJSON(t *testing.T, dir string, require map[string]string) {
 	}
 }
 
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
 func javaAllowedCommands() *allowlist.AllowedCommands {
 	return &allowlist.AllowedCommands{
 		Prebuild: []string{
@@ -153,7 +162,9 @@ func nodeAllowedCommands() *allowlist.AllowedCommands {
 func pythonAllowedCommands() *allowlist.AllowedCommands {
 	return &allowlist.AllowedCommands{
 		Prebuild: []string{
+			"pip install poetry && poetry install --only main --no-interaction",
 			"pip install -r requirements.txt",
+			"pip install pip-tools && pip-compile requirements.in && pip install -r requirements.txt",
 			"pip install pipenv && pipenv install --system --deploy",
 			"pip install .",
 		},
@@ -964,6 +975,25 @@ func TestAutoDetectBuildConfigPythonDjango(t *testing.T) {
 	repo := t.TempDir()
 	touchFile(t, repo, "requirements.txt")
 	touchFile(t, repo, "manage.py")
+	if err := os.MkdirAll(filepath.Join(repo, "config"), 0o755); err != nil {
+		t.Fatalf("failed to create config dir: %v", err)
+	}
+	wsgiPy := `from django.core.wsgi import get_wsgi_application
+
+application = get_wsgi_application()
+`
+	if err := os.WriteFile(filepath.Join(repo, "config", "wsgi.py"), []byte(wsgiPy), 0o644); err != nil {
+		t.Fatalf("failed to write wsgi.py: %v", err)
+	}
+	settingsPy := `INSTALLED_APPS = [
+    "django.contrib.staticfiles",
+]
+STATIC_URL = "/static/"
+STATIC_ROOT = "/tmp/static"
+`
+	if err := os.WriteFile(filepath.Join(repo, "config", "settings.py"), []byte(settingsPy), 0o644); err != nil {
+		t.Fatalf("failed to write settings.py: %v", err)
+	}
 
 	cfg, err := AutoDetectBuildConfig(repo, pythonAllowedCommands())
 	if err != nil {
@@ -976,8 +1006,55 @@ func TestAutoDetectBuildConfigPythonDjango(t *testing.T) {
 	if cfg.PrebuildCommand != "pip install -r requirements.txt" {
 		t.Fatalf("expected pip install from requirements, got %q", cfg.PrebuildCommand)
 	}
-	if cfg.RunCommand != "python manage.py runserver 0.0.0.0:${PORT:-8000}" {
-		t.Fatalf("expected django runserver command, got %q", cfg.RunCommand)
+	if cfg.Framework != "django" {
+		t.Fatalf("expected django framework, got %q", cfg.Framework)
+	}
+	if cfg.RunCommand != "gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8000}" {
+		t.Fatalf("expected django gunicorn command, got %q", cfg.RunCommand)
+	}
+	expectedInit := `if [ "${DJANGO_RUN_MIGRATIONS:-0}" = "1" ]; then python manage.py migrate --noinput; fi; if [ "${DJANGO_RUN_COLLECTSTATIC:-0}" = "1" ]; then python manage.py collectstatic --noinput; fi`
+	if cfg.RuntimeInitCommand != expectedInit {
+		t.Fatalf("expected django runtime init command %q, got %q", expectedInit, cfg.RuntimeInitCommand)
+	}
+	if !containsString(cfg.ValidationWarnings, "Django startup hooks are opt-in: set DJANGO_RUN_MIGRATIONS=1 to run migrations at container start. The database must be reachable from the container.") {
+		t.Fatalf("expected migration warning, got %#v", cfg.ValidationWarnings)
+	}
+	if !containsString(cfg.ValidationWarnings, "Django collectstatic is opt-in: set DJANGO_RUN_COLLECTSTATIC=1 to run collectstatic at container start. STATIC_ROOT should be configured.") {
+		t.Fatalf("expected collectstatic warning, got %#v", cfg.ValidationWarnings)
+	}
+}
+
+func TestAutoDetectBuildConfigPythonDjangoASGI(t *testing.T) {
+	repo := t.TempDir()
+	touchFile(t, repo, "requirements.txt")
+	touchFile(t, repo, "manage.py")
+	if err := os.WriteFile(filepath.Join(repo, "requirements.txt"), []byte("django\nhypercorn\n"), 0o644); err != nil {
+		t.Fatalf("failed to write requirements.txt: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "config"), 0o755); err != nil {
+		t.Fatalf("failed to create config dir: %v", err)
+	}
+	asgiPy := `from django.core.asgi import get_asgi_application
+
+application = get_asgi_application()
+`
+	if err := os.WriteFile(filepath.Join(repo, "config", "asgi.py"), []byte(asgiPy), 0o644); err != nil {
+		t.Fatalf("failed to write asgi.py: %v", err)
+	}
+
+	cfg, err := AutoDetectBuildConfig(repo, pythonAllowedCommands())
+	if err != nil {
+		t.Fatalf("AutoDetectBuildConfig returned error: %v", err)
+	}
+
+	if cfg.Framework != "django" {
+		t.Fatalf("expected django framework, got %q", cfg.Framework)
+	}
+	if cfg.RunCommand != "hypercorn config.asgi:application --bind 0.0.0.0:${PORT:-8000}" {
+		t.Fatalf("expected django asgi command, got %q", cfg.RunCommand)
+	}
+	if cfg.RuntimeInitCommand != `if [ "${DJANGO_RUN_MIGRATIONS:-0}" = "1" ]; then python manage.py migrate --noinput; fi` {
+		t.Fatalf("expected django runtime init command, got %q", cfg.RuntimeInitCommand)
 	}
 }
 
@@ -1227,8 +1304,8 @@ app = Flask(__name__)
 		t.Fatalf("expected flask gunicorn command, got %q", cfg.RunCommand)
 	}
 	dockerfile := string(cfg.DockerfileContent)
-	if !strings.Contains(dockerfile, "FROM python:3") {
-		t.Fatalf("expected python:3 base image, got:\n%s", dockerfile)
+	if !strings.Contains(dockerfile, "FROM python:3-alpine") {
+		t.Fatalf("expected alpine python base image, got:\n%s", dockerfile)
 	}
 	if !strings.Contains(dockerfile, "ENV PYTHONUNBUFFERED=1") {
 		t.Fatalf("expected PYTHONUNBUFFERED env, got:\n%s", dockerfile)
@@ -1241,6 +1318,198 @@ app = Flask(__name__)
 	}
 	if strings.Contains(dockerfile, "FROM python:3-slim AS builder") {
 		t.Fatalf("did not expect multi-stage slim python Dockerfile, got:\n%s", dockerfile)
+	}
+}
+
+func TestAutoDetectBuildConfigPythonQuart(t *testing.T) {
+	repo := t.TempDir()
+	mainPy := `from quart import Quart
+
+app = Quart(__name__)
+`
+	if err := os.WriteFile(filepath.Join(repo, "main.py"), []byte(mainPy), 0o644); err != nil {
+		t.Fatalf("failed to write main.py: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "requirements.txt"), []byte("quart\n"), 0o644); err != nil {
+		t.Fatalf("failed to write requirements.txt: %v", err)
+	}
+
+	cfg, err := AutoDetectBuildConfig(repo, pythonAllowedCommands())
+	if err != nil {
+		t.Fatalf("AutoDetectBuildConfig returned error: %v", err)
+	}
+
+	if cfg.Framework != "quart" {
+		t.Fatalf("expected quart framework, got %q", cfg.Framework)
+	}
+	if cfg.RunCommand != "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}" {
+		t.Fatalf("expected quart uvicorn command, got %q", cfg.RunCommand)
+	}
+}
+
+func TestAutoDetectBuildConfigPythonStarlette(t *testing.T) {
+	repo := t.TempDir()
+	mainPy := `from starlette.applications import Starlette
+
+app = Starlette()
+`
+	if err := os.WriteFile(filepath.Join(repo, "main.py"), []byte(mainPy), 0o644); err != nil {
+		t.Fatalf("failed to write main.py: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "requirements.txt"), []byte("starlette\n"), 0o644); err != nil {
+		t.Fatalf("failed to write requirements.txt: %v", err)
+	}
+
+	cfg, err := AutoDetectBuildConfig(repo, pythonAllowedCommands())
+	if err != nil {
+		t.Fatalf("AutoDetectBuildConfig returned error: %v", err)
+	}
+
+	if cfg.Framework != "starlette" {
+		t.Fatalf("expected starlette framework, got %q", cfg.Framework)
+	}
+	if cfg.RunCommand != "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}" {
+		t.Fatalf("expected starlette uvicorn command, got %q", cfg.RunCommand)
+	}
+}
+
+func TestAutoDetectBuildConfigPythonSanic(t *testing.T) {
+	repo := t.TempDir()
+	mainPy := `from sanic import Sanic
+
+app = Sanic("demo")
+`
+	if err := os.WriteFile(filepath.Join(repo, "main.py"), []byte(mainPy), 0o644); err != nil {
+		t.Fatalf("failed to write main.py: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "requirements.txt"), []byte("sanic\n"), 0o644); err != nil {
+		t.Fatalf("failed to write requirements.txt: %v", err)
+	}
+
+	cfg, err := AutoDetectBuildConfig(repo, pythonAllowedCommands())
+	if err != nil {
+		t.Fatalf("AutoDetectBuildConfig returned error: %v", err)
+	}
+
+	if cfg.Framework != "sanic" {
+		t.Fatalf("expected sanic framework, got %q", cfg.Framework)
+	}
+	if cfg.RunCommand != "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}" {
+		t.Fatalf("expected sanic uvicorn command, got %q", cfg.RunCommand)
+	}
+}
+
+func TestAutoDetectBuildConfigPythonLitestar(t *testing.T) {
+	repo := t.TempDir()
+	mainPy := `from litestar import Litestar
+
+app = Litestar([])
+`
+	if err := os.WriteFile(filepath.Join(repo, "main.py"), []byte(mainPy), 0o644); err != nil {
+		t.Fatalf("failed to write main.py: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "requirements.txt"), []byte("litestar\n"), 0o644); err != nil {
+		t.Fatalf("failed to write requirements.txt: %v", err)
+	}
+
+	cfg, err := AutoDetectBuildConfig(repo, pythonAllowedCommands())
+	if err != nil {
+		t.Fatalf("AutoDetectBuildConfig returned error: %v", err)
+	}
+
+	if cfg.Framework != "litestar" {
+		t.Fatalf("expected litestar framework, got %q", cfg.Framework)
+	}
+	if cfg.RunCommand != "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}" {
+		t.Fatalf("expected litestar uvicorn command, got %q", cfg.RunCommand)
+	}
+}
+
+func TestAutoDetectBuildConfigPythonFalconASGI(t *testing.T) {
+	repo := t.TempDir()
+	mainPy := `import falcon.asgi
+
+app = falcon.asgi.App()
+`
+	if err := os.WriteFile(filepath.Join(repo, "main.py"), []byte(mainPy), 0o644); err != nil {
+		t.Fatalf("failed to write main.py: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "requirements.txt"), []byte("falcon\n"), 0o644); err != nil {
+		t.Fatalf("failed to write requirements.txt: %v", err)
+	}
+
+	cfg, err := AutoDetectBuildConfig(repo, pythonAllowedCommands())
+	if err != nil {
+		t.Fatalf("AutoDetectBuildConfig returned error: %v", err)
+	}
+
+	if cfg.Framework != "falcon-asgi" {
+		t.Fatalf("expected falcon-asgi framework, got %q", cfg.Framework)
+	}
+	if cfg.RunCommand != "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}" {
+		t.Fatalf("expected falcon asgi uvicorn command, got %q", cfg.RunCommand)
+	}
+}
+
+func TestAutoDetectBuildConfigPythonPoetry(t *testing.T) {
+	repo := t.TempDir()
+	touchFile(t, repo, "poetry.lock")
+	if err := os.WriteFile(filepath.Join(repo, "pyproject.toml"), []byte("[tool.poetry]\nname = \"demo\"\nversion = \"0.1.0\"\n"), 0o644); err != nil {
+		t.Fatalf("failed to write pyproject.toml: %v", err)
+	}
+	touchFile(t, repo, "app.py")
+
+	cfg, err := AutoDetectBuildConfig(repo, pythonAllowedCommands())
+	if err != nil {
+		t.Fatalf("AutoDetectBuildConfig returned error: %v", err)
+	}
+
+	if cfg.PrebuildCommand != "pip install poetry && poetry install --only main --no-interaction" {
+		t.Fatalf("expected poetry prebuild command, got %q", cfg.PrebuildCommand)
+	}
+}
+
+func TestAutoDetectBuildConfigPythonPipTools(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, "requirements.in"), []byte("flask\n"), 0o644); err != nil {
+		t.Fatalf("failed to write requirements.in: %v", err)
+	}
+	touchFile(t, repo, "app.py")
+
+	cfg, err := AutoDetectBuildConfig(repo, pythonAllowedCommands())
+	if err != nil {
+		t.Fatalf("AutoDetectBuildConfig returned error: %v", err)
+	}
+
+	if cfg.PrebuildCommand != "pip install pip-tools && pip-compile requirements.in && pip install -r requirements.txt" {
+		t.Fatalf("expected pip-tools prebuild command, got %q", cfg.PrebuildCommand)
+	}
+}
+
+func TestAutoDetectBuildConfigPythonFastAPINumpyUsesSlim(t *testing.T) {
+	repo := t.TempDir()
+	mainPy := `from fastapi import FastAPI
+
+app = FastAPI()
+`
+	if err := os.WriteFile(filepath.Join(repo, "main.py"), []byte(mainPy), 0o644); err != nil {
+		t.Fatalf("failed to write main.py: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "requirements.txt"), []byte("fastapi\nnumpy\n"), 0o644); err != nil {
+		t.Fatalf("failed to write requirements.txt: %v", err)
+	}
+
+	cfg, err := AutoDetectBuildConfig(repo, pythonAllowedCommands())
+	if err != nil {
+		t.Fatalf("AutoDetectBuildConfig returned error: %v", err)
+	}
+
+	dockerfile := string(cfg.DockerfileContent)
+	if !strings.Contains(dockerfile, "FROM python:3-slim") {
+		t.Fatalf("expected slim python base image for compiled deps, got:\n%s", dockerfile)
+	}
+	if strings.Contains(dockerfile, "FROM python:3-alpine") {
+		t.Fatalf("did not expect alpine python base image with numpy, got:\n%s", dockerfile)
 	}
 }
 

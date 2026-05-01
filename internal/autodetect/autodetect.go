@@ -3,6 +3,7 @@ package autodetect
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -463,7 +464,7 @@ func detectPythonCommands(repoPath string, allowed *allowlist.AllowedCommands) (
 }
 
 func pythonPrebuildCandidates(repoPath string) []string {
-	candidates := make([]string, 0, 3)
+	candidates := make([]string, 0, 5)
 	addCandidate := func(cmd string) {
 		if cmd == "" {
 			return
@@ -476,8 +477,13 @@ func pythonPrebuildCandidates(repoPath string) []string {
 		candidates = append(candidates, cmd)
 	}
 
+	if repoPath != "" && fileExists(filepath.Join(repoPath, "poetry.lock")) && fileExists(filepath.Join(repoPath, "pyproject.toml")) {
+		addCandidate("pip install poetry && poetry install --only main --no-interaction")
+	}
 	if repoPath != "" && fileExists(filepath.Join(repoPath, "requirements.txt")) {
 		addCandidate("pip install -r requirements.txt")
+	} else if repoPath != "" && fileExists(filepath.Join(repoPath, "requirements.in")) {
+		addCandidate("pip install pip-tools && pip-compile requirements.in && pip install -r requirements.txt")
 	}
 	if repoPath != "" && fileExists(filepath.Join(repoPath, "Pipfile")) {
 		addCandidate("pip install pipenv && pipenv install --system --deploy")
@@ -510,6 +516,12 @@ func pythonRunCandidates(repoPath string) []string {
 		candidates = append(candidates, cmd)
 	}
 
+	if _, cmd := detectASGIFrameworkRunCommand(repoPath); cmd != "" {
+		addCandidate(cmd)
+	}
+	if cmd := detectDjangoRunCommand(repoPath); cmd != "" {
+		addCandidate(cmd)
+	}
 	if cmd := detectGunicornRunCommand(repoPath); cmd != "" {
 		addCandidate(cmd)
 	}
@@ -541,18 +553,48 @@ func pythonRunCandidates(repoPath string) []string {
 	return candidates
 }
 
-func detectFastAPIRunCommand(repoPath string) string {
-	if repoPath == "" {
+func detectDjangoRunCommand(repoPath string) string {
+	if repoPath == "" || !fileExists(filepath.Join(repoPath, "manage.py")) {
 		return ""
+	}
+
+	if module := detectDjangoWSGIModule(repoPath); module != "" {
+		return fmt.Sprintf("gunicorn %s:application --bind 0.0.0.0:${PORT:-8000}", module)
+	}
+	if module := detectDjangoASGIModule(repoPath); module != "" {
+		if pythonDependencyPresent(repoPath, "hypercorn") {
+			return fmt.Sprintf("hypercorn %s:application --bind 0.0.0.0:${PORT:-8000}", module)
+		}
+		return fmt.Sprintf("uvicorn %s:application --host 0.0.0.0 --port ${PORT:-8000}", module)
+	}
+	return ""
+}
+
+func detectFastAPIRunCommand(repoPath string) string {
+	framework, command := detectASGIFrameworkRunCommand(repoPath)
+	switch framework {
+	case "fastapi", "starlette":
+		return command
+	}
+	return ""
+}
+
+func detectASGIFrameworkRunCommand(repoPath string) (string, string) {
+	if repoPath == "" {
+		return "", ""
 	}
 
 	candidates := []string{
 		"main.py",
 		"app.py",
+		"api.py",
 		"server.py",
+		"run.py",
 		"src/main.py",
 		"src/app.py",
+		"src/api.py",
 		"src/server.py",
+		"src/run.py",
 	}
 
 	for _, path := range candidates {
@@ -567,30 +609,67 @@ func detectFastAPIRunCommand(repoPath string) string {
 		}
 
 		text := string(content)
-		lower := strings.ToLower(text)
-		if !strings.Contains(lower, "fastapi") && !strings.Contains(lower, "starlette") {
-			continue
-		}
-
-		appName := detectAssignedName(text, "FastAPI(", "")
-		if appName == "" {
-			appName = detectAssignedName(text, "Starlette(", "app")
-		}
-		if appName == "" {
-			appName = "app"
-		}
-
 		module := pythonModuleFromPath(path)
 		if module == "" {
 			continue
 		}
-		if pythonDependencyPresent(repoPath, "hypercorn") {
-			return fmt.Sprintf("hypercorn %s:%s --bind 0.0.0.0:${PORT:-8000}", module, appName)
+
+		framework, appName := detectASGIFrameworkFromSource(text)
+		if framework == "" {
+			continue
 		}
-		return fmt.Sprintf("uvicorn %s:%s --host 0.0.0.0 --port ${PORT:-8000}", module, appName)
+
+		return framework, pythonASGIServerCommand(repoPath, module, appName)
 	}
 
-	return ""
+	return "", ""
+}
+
+func detectASGIFrameworkFromSource(source string) (string, string) {
+	cases := []struct {
+		framework    string
+		needles      []string
+		constructor  string
+		defaultApp   string
+	}{
+		{framework: "fastapi", needles: []string{"fastapi("}, constructor: "FastAPI(", defaultApp: "app"},
+		{framework: "starlette", needles: []string{"starlette("}, constructor: "Starlette(", defaultApp: "app"},
+		{framework: "quart", needles: []string{"quart("}, constructor: "Quart(", defaultApp: "app"},
+		{framework: "sanic", needles: []string{"sanic("}, constructor: "Sanic(", defaultApp: "app"},
+		{framework: "litestar", needles: []string{"litestar("}, constructor: "Litestar(", defaultApp: "app"},
+		{framework: "falcon-asgi", needles: []string{"falcon.asgi", "from falcon import asgi"}, constructor: "falcon.asgi.App(", defaultApp: "app"},
+	}
+
+	lower := strings.ToLower(source)
+	for _, item := range cases {
+		matched := false
+		for _, needle := range item.needles {
+			if strings.Contains(lower, needle) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		appName := detectAssignedName(source, item.constructor, item.defaultApp)
+		if appName == "" && item.framework == "falcon-asgi" {
+			appName = detectAssignedName(source, "asgi.App(", item.defaultApp)
+		}
+		if appName == "" {
+			appName = item.defaultApp
+		}
+		return item.framework, appName
+	}
+
+	return "", ""
+}
+
+func pythonASGIServerCommand(repoPath, module, appName string) string {
+	if pythonDependencyPresent(repoPath, "hypercorn") {
+		return fmt.Sprintf("hypercorn %s:%s --bind 0.0.0.0:${PORT:-8000}", module, appName)
+	}
+	return fmt.Sprintf("uvicorn %s:%s --host 0.0.0.0 --port ${PORT:-8000}", module, appName)
 }
 
 func pythonDependencyPresent(repoPath, name string) bool {
@@ -599,7 +678,7 @@ func pythonDependencyPresent(repoPath, name string) bool {
 	}
 
 	needle := strings.ToLower(name)
-	for _, filename := range []string{"requirements.txt", "pyproject.toml", "setup.py", "setup.cfg"} {
+	for _, filename := range []string{"requirements.txt", "requirements.in", "poetry.lock", "pyproject.toml", "setup.py", "setup.cfg"} {
 		fullPath := filepath.Join(repoPath, filename)
 		if !fileExists(fullPath) {
 			continue
@@ -621,17 +700,8 @@ func detectASGIApplicationRunCommand(repoPath string) string {
 		return ""
 	}
 
-	candidates := []string{
-		"asgi.py",
-		"src/asgi.py",
-	}
-
-	for _, path := range candidates {
+	for _, path := range findPythonModuleFiles(repoPath, "asgi.py") {
 		fullPath := filepath.Join(repoPath, path)
-		if !fileExists(fullPath) {
-			continue
-		}
-
 		content, err := os.ReadFile(fullPath)
 		if err != nil {
 			continue
@@ -658,14 +728,13 @@ func detectGunicornRunCommand(repoPath string) string {
 		return ""
 	}
 
-	candidates := []string{
-		"wsgi.py",
+	candidates := append([]string{}, findPythonModuleFiles(repoPath, "wsgi.py")...)
+	candidates = append(candidates,
 		"app.py",
 		"main.py",
 		"server.py",
-		"src/wsgi.py",
 		"src/app.py",
-	}
+	)
 
 	for _, path := range candidates {
 		fullPath := filepath.Join(repoPath, path)
@@ -700,6 +769,91 @@ func detectGunicornRunCommand(repoPath string) string {
 	}
 
 	return ""
+}
+
+func detectDjangoWSGIModule(repoPath string) string {
+	return detectDjangoApplicationModule(repoPath, "wsgi.py", "django.core.wsgi")
+}
+
+func detectDjangoASGIModule(repoPath string) string {
+	return detectDjangoApplicationModule(repoPath, "asgi.py", "django.core.asgi")
+}
+
+func detectDjangoApplicationModule(repoPath, filename, marker string) string {
+	if repoPath == "" || filename == "" {
+		return ""
+	}
+
+	for _, path := range findPythonModuleFiles(repoPath, filename) {
+		content, err := os.ReadFile(filepath.Join(repoPath, path))
+		if err != nil {
+			continue
+		}
+		lower := strings.ToLower(string(content))
+		if !strings.Contains(lower, "application") {
+			continue
+		}
+		if marker != "" && !strings.Contains(lower, strings.ToLower(marker)) {
+			continue
+		}
+		if module := pythonModuleFromPath(path); module != "" {
+			return module
+		}
+	}
+
+	return ""
+}
+
+func findPythonModuleFiles(repoPath, filename string) []string {
+	if repoPath == "" || filename == "" {
+		return nil
+	}
+
+	results := make([]string, 0)
+	skipDirs := map[string]struct{}{
+		".git":       {},
+		".hg":        {},
+		".svn":       {},
+		".tox":       {},
+		".venv":      {},
+		"__pycache__": {},
+		"build":      {},
+		"dist":       {},
+		"env":        {},
+		"node_modules": {},
+		"venv":       {},
+	}
+
+	_ = filepath.WalkDir(repoPath, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if entry.IsDir() {
+			if _, ok := skipDirs[entry.Name()]; ok && path != repoPath {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.Name() != filename {
+			return nil
+		}
+		relative, relErr := filepath.Rel(repoPath, path)
+		if relErr != nil {
+			return nil
+		}
+		results = append(results, filepath.ToSlash(relative))
+		return nil
+	})
+
+	sort.Slice(results, func(i, j int) bool {
+		depthI := strings.Count(results[i], "/")
+		depthJ := strings.Count(results[j], "/")
+		if depthI == depthJ {
+			return results[i] < results[j]
+		}
+		return depthI < depthJ
+	})
+	return results
 }
 
 func detectAssignedName(source, constructor, fallback string) string {
