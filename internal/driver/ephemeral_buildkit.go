@@ -25,16 +25,18 @@ const (
 	ephemeralBuildKitReadinessPoll    = 500 * time.Millisecond
 )
 
+var runDockerCommandContextFunc = runDockerCommandContextDefault
+
 type EphemeralBuildKitOpts struct {
-	JobID              string
-	UserNetwork        string
-	Registry           string
-	RegistryPlainHTTP  bool
-	CacheDir           string
-	UseLocalCache      bool
-	CPULimit           float64
-	MemoryMB           int
-	UseSoftLimits      bool
+	JobID             string
+	UserNetwork       string
+	Registry          string
+	RegistryPlainHTTP bool
+	CacheDir          string
+	UseLocalCache     bool
+	CPULimit          float64
+	MemoryMB          int
+	UseSoftLimits     bool
 }
 
 type EphemeralBuildKit struct {
@@ -259,7 +261,7 @@ func (s *EphemeralBuildKit) Stop() error {
 		return nil
 	}
 
-	output, err := runDockerCommand("rm", "-f", s.ContainerName)
+	output, err := runDockerCommand("rm", "-f", "-v", s.ContainerName)
 	if err != nil && !isNoSuchContainerError(output) {
 		return fmt.Errorf("failed to remove container %q: %w", s.ContainerName, err)
 	}
@@ -277,7 +279,7 @@ func CleanupOrphanedEphemeralBuildKits() error {
 
 	ids := splitLines(output)
 	for _, id := range ids {
-		removeOut, removeErr := runDockerCommand("rm", "-f", id)
+		removeOut, removeErr := runDockerCommand("rm", "-f", "-v", id)
 		if removeErr != nil && !isNoSuchContainerError(removeOut) {
 			return fmt.Errorf("failed to remove stale buildkit container %q: %w", id, removeErr)
 		}
@@ -338,7 +340,7 @@ func waitForBuildKitReady(ctx context.Context, addr string) error {
 }
 
 func forceRemoveContainer(ctx context.Context, name string) error {
-	output, err := runDockerCommandContext(ctx, "rm", "-f", name)
+	output, err := runDockerCommandContext(ctx, "rm", "-f", "-v", name)
 	if err != nil && !isNoSuchContainerError(output) {
 		return fmt.Errorf("failed to remove existing container %q: %w", name, err)
 	}
@@ -368,10 +370,14 @@ func splitLines(value string) []string {
 }
 
 func runDockerCommand(args ...string) (string, error) {
-	return runDockerCommandContext(context.Background(), args...)
+	return runDockerCommandContextFunc(context.Background(), args...)
 }
 
 func runDockerCommandContext(ctx context.Context, args ...string) (string, error) {
+	return runDockerCommandContextFunc(ctx, args...)
+}
+
+func runDockerCommandContextDefault(ctx context.Context, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	output, err := cmd.CombinedOutput()
 	trimmed := strings.TrimSpace(string(output))
