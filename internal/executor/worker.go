@@ -23,6 +23,7 @@ import (
 	"hubfly-builder/internal/allowlist"
 	"hubfly-builder/internal/api"
 	"hubfly-builder/internal/autodetect"
+	"hubfly-builder/internal/dockerfileparams"
 	"hubfly-builder/internal/driver"
 	"hubfly-builder/internal/envplan"
 	"hubfly-builder/internal/logs"
@@ -296,6 +297,15 @@ func (w *Worker) Run() error {
 			w.log("Dockerfile found in context, starting BuildKit build...")
 		}
 
+		var stagedDockerfile []byte
+		if !hasCustomDockerfile {
+			stagedDockerfile, err = dockerfileparams.Stage(dockerfilePath, w.job.BuildConfig.DockerfileArgs, w.job.BuildConfig.DockerfileEnv)
+			if err != nil {
+				w.log("ERROR: failed to stage Dockerfile request params: %v", err)
+				return w.failJob(err.Error())
+			}
+		}
+
 		audit := autodetect.AuditDockerfileWithOptions(autodetect.AutoDetectOptions{
 			RepoRoot:   w.workDir,
 			WorkingDir: appDir,
@@ -314,6 +324,8 @@ func (w *Worker) Run() error {
 		w.job.BuildConfig.ValidationWarnings = mergeWarnings(w.job.BuildConfig.ValidationWarnings, audit.Warnings)
 		if hasCustomDockerfile {
 			w.job.BuildConfig.DockerfileContent = customDockerfile
+		} else if len(stagedDockerfile) > 0 {
+			w.job.BuildConfig.DockerfileContent = stagedDockerfile
 		} else if content, readErr := os.ReadFile(dockerfilePath); readErr == nil {
 			w.job.BuildConfig.DockerfileContent = content
 		}
@@ -327,7 +339,11 @@ func (w *Worker) Run() error {
 
 		imageTag := w.generateImageTag()
 		w.log("Image tag: %s", imageTag)
-		buildArgs := buildArgsWithCacheID(envResult.BuildArgs, w.cacheMountID())
+		baseBuildArgs := envResult.BuildArgs
+		if !hasCustomDockerfile {
+			baseBuildArgs = dockerfileparams.BuildArgs(baseBuildArgs, w.job.BuildConfig.DockerfileArgs, w.job.BuildConfig.DockerfileEnv)
+		}
+		buildArgs := buildArgsWithCacheID(baseBuildArgs, w.cacheMountID())
 
 		opts := driver.BuildOpts{
 			ContextPath:    buildContext,

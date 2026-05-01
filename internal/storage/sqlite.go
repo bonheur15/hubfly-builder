@@ -118,6 +118,8 @@ type BuildConfig struct {
 	Env                map[string]string      `json:"env,omitempty"`
 	EnvOverrides       map[string]EnvOverride `json:"envOverrides,omitempty"`
 	ResolvedEnvPlan    []ResolvedEnvVar       `json:"resolvedEnvPlan,omitempty"`
+	DockerfileArgs     map[string]string      `json:"dockerfileArgs,omitempty"`
+	DockerfileEnv      map[string]string      `json:"dockerfileEnv,omitempty"`
 	CustomDockerfile   string                 `json:"customDockerfile,omitempty"`
 	DockerfileContent  []byte                 `json:"dockerfileContent,omitempty"`
 }

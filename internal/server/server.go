@@ -18,6 +18,7 @@ import (
 	"github.com/gorilla/mux"
 	"hubfly-builder/internal/allowlist"
 	"hubfly-builder/internal/autodetect"
+	"hubfly-builder/internal/dockerfileparams"
 	"hubfly-builder/internal/envplan"
 	"hubfly-builder/internal/executor"
 	"hubfly-builder/internal/logs"
@@ -193,23 +194,25 @@ func (s *Server) CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 				Env:                job.BuildConfig.Env,
 				EnvOverrides:       job.BuildConfig.EnvOverrides,
 				ResolvedEnvPlan:    job.BuildConfig.ResolvedEnvPlan,
+				DockerfileArgs:     job.BuildConfig.DockerfileArgs,
+				DockerfileEnv:      job.BuildConfig.DockerfileEnv,
 				CustomDockerfile:   job.BuildConfig.CustomDockerfile,
 				DockerfileContent:  customDockerfile,
 			}
 		} else if dockerfilePath != "" {
+			dockerfileContent, stageErr := dockerfileparams.Stage(dockerfilePath, job.BuildConfig.DockerfileArgs, job.BuildConfig.DockerfileEnv)
+			if stageErr != nil {
+				log.Printf("ERROR: job %s failed to stage Dockerfile request params path=%s: %v", job.ID, dockerfilePath, stageErr)
+				http.Error(w, stageErr.Error(), http.StatusBadRequest)
+				return
+			}
+
 			audit := autodetect.AuditDockerfileWithOptions(autodetect.AutoDetectOptions{
 				RepoRoot:   tempDir,
 				WorkingDir: appDir,
 			}, dockerfilePath)
 			if len(audit.Errors) > 0 {
 				http.Error(w, strings.Join(audit.Errors, "; "), http.StatusBadRequest)
-				return
-			}
-
-			dockerfileContent, readErr := os.ReadFile(dockerfilePath)
-			if readErr != nil {
-				log.Printf("ERROR: job %s failed to read Dockerfile path=%s: %v", job.ID, dockerfilePath, readErr)
-				http.Error(w, "failed to read Dockerfile", http.StatusInternalServerError)
 				return
 			}
 
@@ -227,6 +230,8 @@ func (s *Server) CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 				Env:                job.BuildConfig.Env,
 				EnvOverrides:       job.BuildConfig.EnvOverrides,
 				ResolvedEnvPlan:    job.BuildConfig.ResolvedEnvPlan,
+				DockerfileArgs:     job.BuildConfig.DockerfileArgs,
+				DockerfileEnv:      job.BuildConfig.DockerfileEnv,
 				CustomDockerfile:   job.BuildConfig.CustomDockerfile,
 				DockerfileContent:  dockerfileContent,
 			}
@@ -268,6 +273,8 @@ func (s *Server) CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 				Env:                job.BuildConfig.Env,
 				EnvOverrides:       job.BuildConfig.EnvOverrides,
 				ResolvedEnvPlan:    job.BuildConfig.ResolvedEnvPlan,
+				DockerfileArgs:     job.BuildConfig.DockerfileArgs,
+				DockerfileEnv:      job.BuildConfig.DockerfileEnv,
 				CustomDockerfile:   job.BuildConfig.CustomDockerfile,
 				DockerfileContent:  detectedConfig.DockerfileContent,
 			}
