@@ -36,4 +36,9 @@ func TestBuildCommandExportsDockerArchiveToHost(t *testing.T) {
 	if strings.Contains(got, "push=true") {
 		t.Fatalf("did not expect direct registry push output in command: %q", got)
 	}
+	for _, forbidden := range []string{"network.host", "force-network-mode=host"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("did not expect %q in command: %q", forbidden, got)
+		}
+	}
 }

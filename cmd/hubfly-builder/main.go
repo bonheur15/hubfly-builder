@@ -25,14 +25,13 @@ const maxConcurrentBuilds = 3
 const logRetentionDays = 7
 
 const (
-	defaultBuildKitAddr = "docker-container://buildkitd"
-	defaultBuildKitHost = "docker-container://buildkitd"
-	defaultCallbackURL  = "https://hubfly.space/api/builds/callback"
-	defaultRegistryURL  = "127.0.0.1:10009"
-	defaultCacheBackend = "local"
-	defaultCacheDir     = "data/buildkit-cache"
-	defaultServerAddr   = ":10008"
-	defaultUploadAddr   = ":10011"
+	defaultHubcellBaseURL = "http://127.0.0.1:10012"
+	defaultCallbackURL    = "https://hubfly.space/api/builds/callback"
+	defaultRegistryURL    = "127.0.0.1:10009"
+	defaultCacheBackend   = "local"
+	defaultCacheDir       = "data/buildkit-cache"
+	defaultServerAddr     = ":10008"
+	defaultUploadAddr     = ":10011"
 )
 
 var version = "dev"
@@ -43,17 +42,15 @@ const (
 )
 
 type EnvConfig struct {
-	BuildKitAddr string `json:"BUILDKIT_ADDR"`
-	BuildKitHost string `json:"BUILDKIT_HOST"`
-	RegistryURL  string `json:"REGISTRY_URL"`
-	CallbackURL  string `json:"CALLBACK_URL"`
-	CacheBackend string `json:"BUILDKIT_CACHE_BACKEND"`
-	CacheDir     string `json:"BUILDKIT_CACHE_DIR"`
+	HubcellBaseURL string `json:"HUBCELL_BASE_URL"`
+	RegistryURL    string `json:"REGISTRY_URL"`
+	CallbackURL    string `json:"CALLBACK_URL"`
+	CacheBackend   string `json:"BUILDKIT_CACHE_BACKEND"`
+	CacheDir       string `json:"BUILDKIT_CACHE_DIR"`
 }
 
 func applyDefaultEnvConfig() {
-	setEnvIfEmpty("BUILDKIT_ADDR", defaultBuildKitAddr)
-	setEnvIfEmpty("BUILDKIT_HOST", defaultBuildKitHost)
+	setEnvIfEmpty("HUBCELL_BASE_URL", defaultHubcellBaseURL)
 	setEnvIfEmpty("REGISTRY_URL", defaultRegistryURL)
 	setEnvIfEmpty("BUILDKIT_CACHE_BACKEND", defaultCacheBackend)
 	setEnvIfEmpty("BUILDKIT_CACHE_DIR", defaultCacheDir)
@@ -80,11 +77,8 @@ func loadOptionalEnvConfig() {
 	}
 
 	// Only override defaults when the optional config provides a value.
-	if config.BuildKitAddr != "" {
-		os.Setenv("BUILDKIT_ADDR", config.BuildKitAddr)
-	}
-	if config.BuildKitHost != "" {
-		os.Setenv("BUILDKIT_HOST", config.BuildKitHost)
+	if config.HubcellBaseURL != "" {
+		os.Setenv("HUBCELL_BASE_URL", config.HubcellBaseURL)
 	}
 	if config.RegistryURL != "" {
 		os.Setenv("REGISTRY_URL", config.RegistryURL)
@@ -244,15 +238,14 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.LUTC)
 	log.Printf("System log file: %s", systemLogPath)
 	log.Printf(
-		"Env: BUILDKIT_ADDR=%q BUILDKIT_HOST=%q REGISTRY_URL=%q CALLBACK_URL=%q",
-		os.Getenv("BUILDKIT_ADDR"),
-		os.Getenv("BUILDKIT_HOST"),
+		"Env: HUBCELL_BASE_URL=%q REGISTRY_URL=%q CALLBACK_URL=%q",
+		os.Getenv("HUBCELL_BASE_URL"),
 		os.Getenv("REGISTRY_URL"),
 		os.Getenv("CALLBACK_URL"),
 	)
 	log.Printf("Effective: REGISTRY_URL=%q CALLBACK_URL=%q", registry, callbackURL)
 	if err := driver.CleanupOrphanedEphemeralBuildKits(); err != nil {
-		log.Printf("WARN: could not cleanup stale ephemeral BuildKit containers: %v", err)
+		log.Printf("WARN: could not cleanup stale ephemeral BuildKit cells: %v", err)
 	}
 
 	// Start log cleanup routine

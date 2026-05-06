@@ -1,13 +1,15 @@
 package driver
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
-	"math"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -15,17 +17,14 @@ import (
 const (
 	ephemeralBuildKitImage            = "moby/buildkit:buildx-stable-1"
 	ephemeralBuildKitPort             = "1234"
-	ephemeralBuildKitConfigPath       = "configs/buildkitd.toml"
-	ephemeralBuildKitConfigMountPath  = "/etc/buildkit/buildkitd.toml"
-	ephemeralBuildKitLabelKey         = "hubfly.builder.ephemeral"
-	ephemeralBuildKitLabelValue       = "true"
-	ephemeralBuildKitWorkerNetMode    = "host"
-	ephemeralBuildKitHostEntitlement  = "network.host"
+	ephemeralBuildKitLabelKey         = "hubfly.role"
+	ephemeralBuildKitLabelValue       = "buildkit"
 	ephemeralBuildKitReadinessTimeout = 30 * time.Second
 	ephemeralBuildKitReadinessPoll    = 500 * time.Millisecond
+	defaultHubcellBaseURL             = "http://127.0.0.1:10012"
 )
 
-var runDockerCommandContextFunc = runDockerCommandContextDefault
+var hubcellDoFunc = http.DefaultClient.Do
 
 type EphemeralBuildKitOpts struct {
 	JobID             string
@@ -43,7 +42,54 @@ type EphemeralBuildKit struct {
 	ContainerName string
 	Addr          string
 	UserNetwork   string
-	configCleanup func()
+	baseURL       string
+}
+
+type hubcellNetworkRequest struct {
+	Name             string `json:"name"`
+	EnableMasquerade bool   `json:"enable_masquerade"`
+}
+
+type hubcellRunRequest struct {
+	ID         string            `json:"id"`
+	Name       string            `json:"name"`
+	Image      string            `json:"image"`
+	Entrypoint []string          `json:"entrypoint,omitempty"`
+	Command    []string          `json:"command"`
+	Labels     map[string]string `json:"labels,omitempty"`
+	Security   hubcellSecurity   `json:"security"`
+	Network    hubcellNetwork    `json:"network"`
+}
+
+type hubcellSecurity struct {
+	AddCapabilities  []string `json:"add_capabilities"`
+	DropCapabilities []string `json:"drop_capabilities"`
+	SeccompProfile   string   `json:"seccomp_profile"`
+	NoNewPrivileges  bool     `json:"no_new_privileges"`
+}
+
+type hubcellNetwork struct {
+	VirtualNetwork string `json:"virtual_network"`
+	AllowHost      bool   `json:"allow_host"`
+}
+
+type hubcellGetResponse struct {
+	Config hubcellCellConfig `json:"config"`
+	State  hubcellCellState  `json:"state"`
+}
+
+type hubcellListResponse struct {
+	Cells []hubcellGetResponse `json:"cells"`
+}
+
+type hubcellCellConfig struct {
+	ID     string            `json:"id"`
+	Labels map[string]string `json:"labels"`
+}
+
+type hubcellCellState struct {
+	Status string `json:"status"`
+	IP     string `json:"ip"`
 }
 
 func StartEphemeralBuildKit(ctx context.Context, opts EphemeralBuildKitOpts) (*EphemeralBuildKit, error) {
@@ -57,43 +103,24 @@ func StartEphemeralBuildKit(ctx context.Context, opts EphemeralBuildKitOpts) (*E
 		return nil, fmt.Errorf("missing user network for ephemeral buildkit")
 	}
 
-	if err := ensureDockerNetworkExists(ctx, userNetwork); err != nil {
+	baseURL := hubcellBaseURL()
+	if err := ensureHubcellNetwork(ctx, baseURL, userNetwork); err != nil {
 		return nil, err
 	}
 
-	containerName := "hubfly-buildkit-" + sanitizeContainerName(jobID)
-	if err := forceRemoveContainer(ctx, containerName); err != nil {
+	cellID := "hubfly-buildkit-" + sanitizeContainerName(jobID)
+	if err := deleteHubcellCell(ctx, baseURL, cellID); err != nil {
 		return nil, err
 	}
 
-	buildKitConfigPath, cleanupConfig, err := resolveBuildKitConfigPathWithRegistry(opts.Registry, opts.RegistryPlainHTTP)
-	if err != nil {
-		return nil, err
-	}
-
-	cacheDir := strings.TrimSpace(opts.CacheDir)
-	if opts.UseLocalCache && cacheDir != "" {
-		absCacheDir, absErr := filepath.Abs(cacheDir)
-		if absErr != nil {
-			return nil, fmt.Errorf("failed to resolve cache dir %q: %w", cacheDir, absErr)
-		}
-		if err := os.MkdirAll(absCacheDir, 0o755); err != nil {
-			return nil, fmt.Errorf("failed to create cache dir %q: %w", absCacheDir, err)
-		}
-		cacheDir = absCacheDir
-	}
-	_, err = runDockerCommandContext(ctx, buildEphemeralBuildKitRunArgs(opts, containerName, buildKitConfigPath, cacheDir)...)
-	if err != nil {
-		if cleanupConfig != nil {
-			cleanupConfig()
-		}
-		return nil, fmt.Errorf("failed to start ephemeral buildkit container %q: %w", containerName, err)
+	if err := runHubcellBuildKitCell(ctx, baseURL, buildHubcellRunRequest(opts, cellID, userNetwork)); err != nil {
+		return nil, fmt.Errorf("failed to start ephemeral buildkit cell %q: %w", cellID, err)
 	}
 
 	session := &EphemeralBuildKit{
-		ContainerName: containerName,
+		ContainerName: cellID,
 		UserNetwork:   userNetwork,
-		configCleanup: cleanupConfig,
+		baseURL:       baseURL,
 	}
 
 	cleanupOnFailure := true
@@ -103,7 +130,7 @@ func StartEphemeralBuildKit(ctx context.Context, opts EphemeralBuildKitOpts) (*E
 		}
 	}()
 
-	addr, err := resolveBuildKitAddr(ctx, containerName, userNetwork)
+	addr, err := resolveBuildKitAddr(ctx, baseURL, cellID)
 	if err != nil {
 		return nil, err
 	}
@@ -117,143 +144,78 @@ func StartEphemeralBuildKit(ctx context.Context, opts EphemeralBuildKitOpts) (*E
 	return session, nil
 }
 
-func resolveBuildKitConfigPath() (string, error) {
-	_, err := os.Stat(ephemeralBuildKitConfigPath)
-	if err == nil {
-		absPath, absErr := filepath.Abs(ephemeralBuildKitConfigPath)
-		if absErr != nil {
-			return "", fmt.Errorf("failed to resolve BuildKit config path %q: %w", ephemeralBuildKitConfigPath, absErr)
-		}
-		return absPath, nil
+func buildHubcellRunRequest(opts EphemeralBuildKitOpts, cellID, userNetwork string) hubcellRunRequest {
+	return hubcellRunRequest{
+		ID:         cellID,
+		Name:       cellID,
+		Image:      ephemeralBuildKitImage,
+		Entrypoint: []string{"buildkitd"},
+		Command:    []string{"--addr", "tcp://0.0.0.0:" + ephemeralBuildKitPort},
+		Labels: map[string]string{
+			ephemeralBuildKitLabelKey: "buildkit",
+			"hubfly.job":              strings.TrimSpace(opts.JobID),
+		},
+		Security: hubcellSecurity{
+			AddCapabilities: []string{
+				"CHOWN",
+				"SETUID",
+				"DAC_OVERRIDE",
+				"FOWNER",
+				"FSETID",
+				"KILL",
+				"NET_BIND_SERVICE",
+				"NET_RAW",
+				"SETFCAP",
+				"SETPCAP",
+				"SETGID",
+				"SYS_CHROOT",
+				"SYS_ADMIN",
+			},
+			DropCapabilities: []string{},
+			SeccompProfile:   "unconfined",
+			NoNewPrivileges:  false,
+		},
+		Network: hubcellNetwork{
+			VirtualNetwork: userNetwork,
+			AllowHost:      true,
+		},
 	}
-	if os.IsNotExist(err) {
-		return "", nil
-	}
-	return "", fmt.Errorf("failed to access BuildKit config %q: %w", ephemeralBuildKitConfigPath, err)
 }
 
-func resolveBuildKitConfigPathWithRegistry(registry string, plainHTTP bool) (string, func(), error) {
-	basePath, err := resolveBuildKitConfigPath()
+func hubcellBaseURL() string {
+	baseURL := strings.TrimSpace(os.Getenv("HUBCELL_BASE_URL"))
+	if baseURL == "" {
+		baseURL = defaultHubcellBaseURL
+	}
+	return strings.TrimRight(baseURL, "/")
+}
+
+func ensureHubcellNetwork(ctx context.Context, baseURL, name string) error {
+	req := hubcellNetworkRequest{Name: name, EnableMasquerade: true}
+	resp, err := hubcellJSON(ctx, http.MethodPost, baseURL+"/v1/networks", req)
 	if err != nil {
-		return "", nil, err
+		return fmt.Errorf("failed to create hubcell network %q: %w", name, err)
 	}
-	if !plainHTTP {
-		return basePath, nil, nil
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusConflict {
+		return nil
 	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return hubcellHTTPError(resp, "create hubcell network")
+	}
+	return nil
+}
 
-	host := normalizeRegistryHost(registry)
-	if host == "" {
-		return basePath, nil, nil
-	}
-
-	var content string
-	if basePath != "" {
-		data, readErr := os.ReadFile(basePath)
-		if readErr != nil {
-			return "", nil, fmt.Errorf("failed to read BuildKit config %q: %w", basePath, readErr)
-		}
-		content = string(data)
-	}
-
-	registryBlock := fmt.Sprintf("[registry.%q]\n  http = true\n  insecure = true\n", host)
-	if !strings.Contains(content, fmt.Sprintf("[registry.%q]", host)) {
-		if content != "" && !strings.HasSuffix(content, "\n") {
-			content += "\n"
-		}
-		content += registryBlock
-	}
-
-	tmpFile, err := os.CreateTemp("", "hubfly-buildkitd-*.toml")
+func runHubcellBuildKitCell(ctx context.Context, baseURL string, req hubcellRunRequest) error {
+	resp, err := hubcellJSON(ctx, http.MethodPost, baseURL+"/v1/cells/run", req)
 	if err != nil {
-		return "", nil, fmt.Errorf("failed to create BuildKit config: %w", err)
+		return err
 	}
-	if _, err := tmpFile.WriteString(content); err != nil {
-		_ = tmpFile.Close()
-		_ = os.Remove(tmpFile.Name())
-		return "", nil, fmt.Errorf("failed to write BuildKit config: %w", err)
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return hubcellHTTPError(resp, "run hubcell buildkit cell")
 	}
-	if err := tmpFile.Close(); err != nil {
-		_ = os.Remove(tmpFile.Name())
-		return "", nil, fmt.Errorf("failed to close BuildKit config: %w", err)
-	}
-
-	cleanup := func() {
-		_ = os.Remove(tmpFile.Name())
-	}
-	return tmpFile.Name(), cleanup, nil
-}
-
-func normalizeRegistryHost(registry string) string {
-	registry = strings.TrimSpace(registry)
-	if registry == "" {
-		return ""
-	}
-	registry = strings.TrimPrefix(registry, "http://")
-	registry = strings.TrimPrefix(registry, "https://")
-	registry = strings.TrimSuffix(registry, "/")
-	if idx := strings.Index(registry, "/"); idx >= 0 {
-		registry = registry[:idx]
-	}
-	return strings.TrimSpace(registry)
-}
-
-func buildEphemeralBuildKitRunArgs(opts EphemeralBuildKitOpts, containerName, configPath string, cacheDir string) []string {
-	args := []string{
-		"run", "-d", "--rm",
-		"--name", containerName,
-		"--privileged",
-		"--label", ephemeralBuildKitLabelKey + "=" + ephemeralBuildKitLabelValue,
-		"--network", opts.UserNetwork,
-	}
-	if opts.UseLocalCache && strings.TrimSpace(cacheDir) != "" {
-		args = append(args, "-v", cacheDir+":"+cacheDir)
-	}
-	if strings.TrimSpace(configPath) != "" {
-		args = append(args, "-v", configPath+":"+ephemeralBuildKitConfigMountPath+":ro")
-	}
-
-	args = appendResourceLimits(args, opts)
-	args = append(args, ephemeralBuildKitImage)
-	if strings.TrimSpace(configPath) != "" {
-		args = append(args, "--config", ephemeralBuildKitConfigMountPath)
-	}
-	args = append(
-		args,
-		"--addr", "tcp://0.0.0.0:"+ephemeralBuildKitPort,
-		"--oci-worker-net="+ephemeralBuildKitWorkerNetMode,
-		"--allow-insecure-entitlement="+ephemeralBuildKitHostEntitlement,
-	)
-	return args
-}
-
-func appendResourceLimits(args []string, opts EphemeralBuildKitOpts) []string {
-	cpu := opts.CPULimit
-	mem := opts.MemoryMB
-	if cpu <= 0 && mem <= 0 {
-		return args
-	}
-
-	if opts.UseSoftLimits {
-		if cpu > 0 {
-			shares := int(math.Round(cpu * 1024))
-			if shares < 2 {
-				shares = 2
-			}
-			args = append(args, "--cpu-shares", strconv.Itoa(shares))
-		}
-		if mem > 0 {
-			args = append(args, "--memory-reservation", fmt.Sprintf("%dm", mem))
-		}
-		return args
-	}
-
-	if cpu > 0 {
-		args = append(args, "--cpus", strconv.FormatFloat(cpu, 'f', -1, 64))
-	}
-	if mem > 0 {
-		args = append(args, "--memory", fmt.Sprintf("%dm", mem))
-	}
-	return args
+	return nil
 }
 
 func (s *EphemeralBuildKit) Stop() error {
@@ -261,59 +223,130 @@ func (s *EphemeralBuildKit) Stop() error {
 		return nil
 	}
 
-	output, err := runDockerCommand("rm", "-f", "-v", s.ContainerName)
-	if err != nil && !isNoSuchContainerError(output) {
-		return fmt.Errorf("failed to remove container %q: %w", s.ContainerName, err)
+	baseURL := strings.TrimRight(s.baseURL, "/")
+	if baseURL == "" {
+		baseURL = hubcellBaseURL()
 	}
-	if s.configCleanup != nil {
-		s.configCleanup()
-	}
-	return nil
+	return deleteHubcellCell(context.Background(), baseURL, s.ContainerName)
 }
 
 func CleanupOrphanedEphemeralBuildKits() error {
-	output, err := runDockerCommand("ps", "-aq", "--filter", "label="+ephemeralBuildKitLabelKey+"="+ephemeralBuildKitLabelValue)
+	baseURL := hubcellBaseURL()
+	resp, err := hubcellJSON(context.Background(), http.MethodGet, baseURL+"/v1/cells", nil)
 	if err != nil {
 		return err
 	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return hubcellHTTPError(resp, "list hubcell cells")
+	}
 
-	ids := splitLines(output)
-	for _, id := range ids {
-		removeOut, removeErr := runDockerCommand("rm", "-f", "-v", id)
-		if removeErr != nil && !isNoSuchContainerError(removeOut) {
-			return fmt.Errorf("failed to remove stale buildkit container %q: %w", id, removeErr)
+	var list hubcellListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		return fmt.Errorf("decode hubcell cells response: %w", err)
+	}
+	for _, cell := range list.Cells {
+		if cell.Config.Labels[ephemeralBuildKitLabelKey] != ephemeralBuildKitLabelValue {
+			continue
+		}
+		id := strings.TrimSpace(cell.Config.ID)
+		if id == "" {
+			continue
+		}
+		if err := deleteHubcellCell(context.Background(), baseURL, id); err != nil {
+			return err
 		}
 	}
-
 	return nil
 }
 
-func resolveBuildKitAddr(ctx context.Context, containerName, network string) (string, error) {
-	ip, err := inspectContainerIPAddress(ctx, containerName, network)
-	if err != nil {
-		return "", err
+func resolveBuildKitAddr(ctx context.Context, baseURL, cellID string) (string, error) {
+	deadline := time.Now().Add(ephemeralBuildKitReadinessTimeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		if err := ctx.Err(); err != nil {
+			return "", fmt.Errorf("hubcell buildkit cell %q IP lookup canceled: %w", cellID, err)
+		}
+
+		cell, err := getHubcellCell(ctx, baseURL, cellID)
+		if err == nil {
+			if strings.EqualFold(cell.State.Status, "running") && strings.TrimSpace(cell.State.IP) != "" {
+				return "tcp://" + strings.TrimSpace(cell.State.IP) + ":" + ephemeralBuildKitPort, nil
+			}
+			lastErr = fmt.Errorf("cell status=%q ip=%q", cell.State.Status, cell.State.IP)
+		} else {
+			lastErr = err
+		}
+		time.Sleep(ephemeralBuildKitReadinessPoll)
 	}
-	if ip == "" {
-		return "", fmt.Errorf("container %q has no IP on network %q", containerName, network)
+	if lastErr == nil {
+		lastErr = fmt.Errorf("timed out waiting for hubcell IP")
 	}
-	return "tcp://" + ip + ":" + ephemeralBuildKitPort, nil
+	return "", fmt.Errorf("hubcell buildkit cell %q has no ready IP: %w", cellID, lastErr)
 }
 
-func inspectContainerIPAddress(ctx context.Context, containerName, network string) (string, error) {
-	format := fmt.Sprintf(`{{with index .NetworkSettings.Networks %q}}{{.IPAddress}}{{end}}`, network)
-	output, err := runDockerCommandContext(ctx, "inspect", "--format", format, containerName)
+func getHubcellCell(ctx context.Context, baseURL, cellID string) (hubcellGetResponse, error) {
+	resp, err := hubcellJSON(ctx, http.MethodGet, baseURL+"/v1/cells/"+url.PathEscape(cellID), nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to inspect IP for container %q on network %q: %w", containerName, network, err)
+		return hubcellGetResponse{}, err
 	}
-	return strings.TrimSpace(output), nil
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return hubcellGetResponse{}, hubcellHTTPError(resp, "get hubcell cell")
+	}
+
+	var cell hubcellGetResponse
+	if err := json.NewDecoder(resp.Body).Decode(&cell); err != nil {
+		return hubcellGetResponse{}, fmt.Errorf("decode hubcell cell response: %w", err)
+	}
+	return cell, nil
 }
 
-func ensureDockerNetworkExists(ctx context.Context, name string) error {
-	_, err := runDockerCommandContext(ctx, "network", "inspect", name)
+func deleteHubcellCell(ctx context.Context, baseURL, cellID string) error {
+	resp, err := hubcellJSON(ctx, http.MethodDelete, baseURL+"/v1/cells/"+url.PathEscape(cellID)+"?force-delete=true", nil)
 	if err != nil {
-		return fmt.Errorf("docker network %q not found or inaccessible: %w", name, err)
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return hubcellHTTPError(resp, "delete hubcell cell")
 	}
 	return nil
+}
+
+func hubcellJSON(ctx context.Context, method, endpoint string, payload interface{}) (*http.Response, error) {
+	var body io.Reader
+	if payload != nil {
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+		body = bytes.NewReader(data)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, body)
+	if err != nil {
+		return nil, err
+	}
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	return hubcellDoFunc(req)
+}
+
+func hubcellHTTPError(resp *http.Response, action string) error {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	text := strings.TrimSpace(string(body))
+	if text == "" {
+		return fmt.Errorf("%s failed: status=%s", action, resp.Status)
+	}
+	return fmt.Errorf("%s failed: status=%s body=%s", action, resp.Status, text)
 }
 
 func waitForBuildKitReady(ctx context.Context, addr string) error {
@@ -337,57 +370,6 @@ func waitForBuildKitReady(ctx context.Context, addr string) error {
 		lastErr = fmt.Errorf("timed out waiting for buildkit readiness")
 	}
 	return fmt.Errorf("buildkit daemon at %s is not ready: %w", addr, lastErr)
-}
-
-func forceRemoveContainer(ctx context.Context, name string) error {
-	output, err := runDockerCommandContext(ctx, "rm", "-f", "-v", name)
-	if err != nil && !isNoSuchContainerError(output) {
-		return fmt.Errorf("failed to remove existing container %q: %w", name, err)
-	}
-	return nil
-}
-
-func isNoSuchContainerError(output string) bool {
-	text := strings.ToLower(output)
-	return strings.Contains(text, "no such container") || strings.Contains(text, "no such object")
-}
-
-func splitLines(value string) []string {
-	if strings.TrimSpace(value) == "" {
-		return nil
-	}
-
-	parts := strings.Split(value, "\n")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		trimmed := strings.TrimSpace(part)
-		if trimmed == "" {
-			continue
-		}
-		out = append(out, trimmed)
-	}
-	return out
-}
-
-func runDockerCommand(args ...string) (string, error) {
-	return runDockerCommandContextFunc(context.Background(), args...)
-}
-
-func runDockerCommandContext(ctx context.Context, args ...string) (string, error) {
-	return runDockerCommandContextFunc(ctx, args...)
-}
-
-func runDockerCommandContextDefault(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	output, err := cmd.CombinedOutput()
-	trimmed := strings.TrimSpace(string(output))
-	if err != nil {
-		if trimmed == "" {
-			return "", fmt.Errorf("docker %s failed: %w", strings.Join(args, " "), err)
-		}
-		return trimmed, fmt.Errorf("docker %s failed: %w: %s", strings.Join(args, " "), err, trimmed)
-	}
-	return trimmed, nil
 }
 
 func sanitizeContainerName(value string) string {

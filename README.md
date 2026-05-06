@@ -25,8 +25,7 @@ The builder can be configured via environment variables or an optional JSON over
 
 | Key | Description | Default / Example |
 | :--- | :--- | :--- |
-| `BUILDKIT_ADDR` | Default BuildKit address | `docker-container://buildkitd` |
-| `BUILDKIT_HOST` | Default BuildKit host | `docker-container://buildkitd` |
+| `HUBCELL_BASE_URL` | Hubcell API base URL used to run ephemeral BuildKit cells | `http://127.0.0.1:10012` |
 | `REGISTRY_URL` | Default registry to push images to | `127.0.0.1:10009` |
 | `CALLBACK_URL` | Backend webhook for reporting results | `https://hubfly.space/api/builds/callback` |
 
@@ -34,28 +33,15 @@ Example optional `configs/env.json`:
 
 ```json
 {
-  "BUILDKIT_ADDR": "docker-container://buildkitd",
-  "BUILDKIT_HOST": "docker-container://buildkitd",
+  "HUBCELL_BASE_URL": "http://127.0.0.1:10012",
   "REGISTRY_URL": "127.0.0.1:10009",
   "CALLBACK_URL": "https://hubfly.space/api/builds/callback"
 }
 ```
 
-### Optional `configs/buildkitd.toml`
+### BuildKit Configuration
 
-If `configs/buildkitd.toml` exists, the builder automatically mounts it into every ephemeral `buildkitd` container and starts BuildKit with `--config /etc/buildkit/buildkitd.toml`.
-
-Default project config:
-
-```toml
-debug = true
-
-[dns]
-  nameservers = ["1.1.1.1", "8.8.8.8"]
-
-[registry."docker.io"]
-  mirrors = ["mirror.gcr.io"]
-```
+Ephemeral BuildKit now runs as a Hubcell cell. Hubcell `/v1/cells/run` does not support Docker-style host bind mounts, so `configs/buildkitd.toml` is not mounted automatically. Bake custom BuildKit config into the BuildKit image or pass supported `buildkitd` flags through the Hubcell launch integration.
 
 ---
 
@@ -68,7 +54,6 @@ At runtime the builder creates and uses these local paths:
 | `./data/hubfly-builder.sqlite` | SQLite database for jobs and state |
 | `./log/` | System log and per-job build logs |
 | `./configs/env.json` | Optional local config overrides |
-| `./configs/buildkitd.toml` | Optional BuildKit daemon config mounted into ephemeral BuildKit containers |
 
 Make sure the process user can create and write these paths.
 
@@ -185,8 +170,8 @@ Creates a new build job and queues it for execution.
 - Example: `"customDockerfile": "FROM node:22-alpine\nWORKDIR /app\nCOPY . .\nRUN npm ci\nCMD [\"npm\", \"start\"]\n"`
 
 `buildConfig.network` is required:
-- The worker starts an ephemeral `buildkitd` container for every job on the requested Docker network and uses that same network for builder-to-daemon communication.
-- The ephemeral daemon runs OCI workers in `host` network mode and build requests force `network=host`, so build `RUN` containers share the daemon network namespace (including the attached user network).
+- The worker starts an ephemeral `buildkitd` Hubcell cell for every job on the requested Hubcell virtual network and uses that cell address for builder-to-daemon communication.
+- Build requests do not grant the `network.host` entitlement and do not force Dockerfile `RUN` steps into host networking.
 - If missing/empty, the job is rejected with `no user network provided`.
 
 ### Gateway Port Mapping
@@ -292,7 +277,7 @@ Clears all jobs from the SQLite database. **Use with caution.**
 
 ### Linux Prerequisites
 
-The builder is intended to run on Linux with Docker available locally.
+The builder is intended to run on Linux with Hubcell and Docker available locally. Hubcell runs the ephemeral BuildKit daemon cells; Docker is still used by the host-managed image export/push workflow.
 
 Required commands:
 
@@ -312,6 +297,7 @@ sudo apt-get install -y git curl ca-certificates
 Before starting the builder, verify the host is ready:
 
 ```bash
+curl -fsS "$HUBCELL_BASE_URL/v1/cells" >/dev/null
 docker version
 buildctl --version
 git --version
@@ -319,9 +305,8 @@ git --version
 
 The builder process must be able to:
 
+- talk to the Hubcell API
 - talk to the Docker daemon
-- create and remove containers
-- inspect Docker networks
 - clone Git repositories over the network
 - push built images to the configured registry
 - write to `./data` and `./log`
@@ -333,16 +318,16 @@ If you run it as a non-root user, that user normally needs access to Docker, for
 For each job, the builder:
 
 - clones the repository into a temporary workspace
-- starts an ephemeral `buildkitd` container on the requested Docker network
+- ensures the requested Hubcell virtual network exists
+- starts an ephemeral `buildkitd` Hubcell cell on that virtual network with host access enabled so host-side `buildctl` can connect
 - runs the build through `buildctl`
 - exports the built image as a Docker archive back to the host
 - loads that archive into the host Docker daemon
 - pushes the image to `REGISTRY_URL` from the host
 - removes the local Docker image after the push attempt finishes
-- removes the temporary workspace and the ephemeral BuildKit container
+- removes the temporary workspace and the ephemeral BuildKit cell
 
-The Docker network provided in `buildConfig.network` must already exist before the job is submitted.
-If `./configs/buildkitd.toml` exists, it is applied to that ephemeral BuildKit daemon for settings such as DNS, debug logging, and registry mirrors.
+The Hubcell virtual network named by `buildConfig.network` is created automatically with masquerading enabled when needed.
 
 ### Build From Source
 ```bash
@@ -391,8 +376,8 @@ This command prints only the version string.
 ### First-Run Checklist
 
 - ensure Docker is running
+- ensure Hubcell is running and reachable through `HUBCELL_BASE_URL`
 - ensure `buildctl` is installed
-- ensure the requested Docker network already exists
 - ensure `REGISTRY_URL` is reachable from the builder host
 - ensure `CALLBACK_URL` is reachable from the builder host
 - ensure the process user can write `./data` and `./log`

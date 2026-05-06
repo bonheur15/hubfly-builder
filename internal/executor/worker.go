@@ -291,10 +291,10 @@ func (w *Worker) Run() error {
 	}
 	defer func() {
 		if stopErr := ephemeralSession.Stop(); stopErr != nil {
-			w.log("WARNING: failed to clean up ephemeral BuildKit daemon %s: %v", ephemeralSession.ContainerName, stopErr)
+			w.log("WARNING: failed to clean up ephemeral BuildKit cell %s: %v", ephemeralSession.ContainerName, stopErr)
 		}
 	}()
-	w.log("Ephemeral BuildKit ready: container=%s userNetwork=%s workerNet=host runNet=host addr=%s", ephemeralSession.ContainerName, ephemeralSession.UserNetwork, ephemeralSession.Addr)
+	w.log("Ephemeral BuildKit ready: cell=%s userNetwork=%s addr=%s", ephemeralSession.ContainerName, ephemeralSession.UserNetwork, ephemeralSession.Addr)
 	activeBuildKit := driver.NewBuildKit(ephemeralSession.Addr)
 
 	if hasExistingDockerfile {
