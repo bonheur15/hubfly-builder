@@ -104,6 +104,7 @@ func javaAllowedCommands() *allowlist.AllowedCommands {
 		Run: []string{
 			"java -jar target/*.jar",
 			"java -jar build/libs/*.jar",
+			"java -jar quarkus-app/quarkus-run.jar",
 			"java -jar app.jar",
 		},
 	}
@@ -319,6 +320,65 @@ func TestAutoDetectBuildConfigJavaMaven(t *testing.T) {
 	dockerfile := string(cfg.DockerfileContent)
 	if !strings.Contains(dockerfile, "FROM maven:3.9-eclipse-temurin-17") {
 		t.Fatalf("expected maven base image in Dockerfile, got:\n%s", dockerfile)
+	}
+}
+
+func TestAutoDetectBuildConfigJavaQuarkusMavenWrapperClearsMavenConfig(t *testing.T) {
+	repo := t.TempDir()
+	pom := `<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>app</groupId>
+  <artifactId>api</artifactId>
+  <version>1.0.0</version>
+  <properties>
+    <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
+  </properties>
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>io.quarkus</groupId>
+        <artifactId>quarkus-maven-plugin</artifactId>
+      </plugin>
+    </plugins>
+  </build>
+</project>`
+	if err := os.WriteFile(filepath.Join(repo, "pom.xml"), []byte(pom), 0o644); err != nil {
+		t.Fatalf("failed to write pom.xml: %v", err)
+	}
+	touchFile(t, repo, "mvnw")
+
+	cfg, err := AutoDetectBuildConfig(repo, allowlist.DefaultAllowedCommands())
+	if err != nil {
+		t.Fatalf("AutoDetectBuildConfig returned error: %v", err)
+	}
+
+	if cfg.BuildCommand != "./mvnw -DoutputFile=target/mvn-dependency-list.log -B -DskipTests clean dependency:list install -Pproduction" {
+		t.Fatalf("expected maven wrapper build command, got %q", cfg.BuildCommand)
+	}
+	if cfg.Framework != "quarkus" {
+		t.Fatalf("expected quarkus framework, got %q", cfg.Framework)
+	}
+	if cfg.RunCommand != "java -jar quarkus-app/quarkus-run.jar" {
+		t.Fatalf("expected quarkus fast-jar run command, got %q", cfg.RunCommand)
+	}
+	dockerfile := string(cfg.DockerfileContent)
+	for _, snippet := range []string{
+		"ENV MAVEN_CONFIG=",
+		"RUN chmod +x mvnw",
+		"ARG HBF_CACHE_ID=default",
+		"RUN --mount=type=cache,target=/root/.m2,id=${HBF_CACHE_ID}-maven-repo ./mvnw -DoutputFile=target/mvn-dependency-list.log -B -DskipTests clean dependency:list install -Pproduction",
+		"cp -R \"$dir\" /app/quarkus-app",
+		"for jar in target/*-runner.jar build/*-runner.jar",
+		"cp \"$jar\" /app/quarkus-app/quarkus-run.jar",
+		"COPY --from=builder /app/ /app/",
+		"CMD exec java -jar quarkus-app/quarkus-run.jar",
+	} {
+		if !strings.Contains(dockerfile, snippet) {
+			t.Fatalf("expected Dockerfile to contain %q, got:\n%s", snippet, dockerfile)
+		}
+	}
+	if strings.Contains(dockerfile, "cp \"$jar\" /app/app.jar") {
+		t.Fatalf("did not expect Quarkus fast-jar to be copied away from its lib directory, got:\n%s", dockerfile)
 	}
 }
 

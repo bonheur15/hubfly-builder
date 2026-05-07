@@ -169,6 +169,7 @@ func DefaultAllowedCommands() *AllowedCommands {
 			"java -jar target/*-SNAPSHOT.jar",
 			"java -jar target/*-runner.jar",
 			"java -jar target/quarkus-app/quarkus-run.jar",
+			"java -jar quarkus-app/quarkus-run.jar",
 			"java -jar target/*-all.jar",
 			"java -jar build/libs/*.jar",
 			"java -jar build/libs/*-boot.jar",

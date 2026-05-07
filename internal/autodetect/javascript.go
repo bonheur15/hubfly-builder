@@ -174,8 +174,7 @@ func detectBuildPlan(opts AutoDetectOptions, allowed *allowlist.AllowedCommands)
 			plan.RuntimeEnv = rustRuntimeEnv(plan.Framework, plan.ExposePort)
 		}
 		if runtime == "java" {
-			plan.PostBuildCommands = append(plan.PostBuildCommands, javaSelectJarCommand())
-			plan.RunCommand = "java -jar app.jar"
+			configureJavaRuntimePlan(&plan, appPath)
 		}
 		plan.BuildContextDir = appDir
 		plan.AppDir = appDir

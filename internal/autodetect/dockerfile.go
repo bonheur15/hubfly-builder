@@ -285,6 +285,10 @@ func renderApplicationDockerfile(plan buildPlan, buildArgKeys, secretBuildKeys [
 	fmt.Fprintf(&builder, "FROM %s AS builder\n\n", builderImage)
 	builder.WriteString("WORKDIR /app\n\n")
 
+	if envLines := renderBuilderEnvLines(plan); envLines != "" {
+		builder.WriteString(envLines)
+		builder.WriteString("\n")
+	}
 	if argLines := renderArgLines(buildArgKeys); argLines != "" {
 		builder.WriteString(argLines)
 	}
@@ -388,6 +392,10 @@ func renderSingleStageDockerfile(plan buildPlan, buildArgKeys, secretBuildKeys [
 	fmt.Fprintf(&builder, "FROM %s\n\n", strings.TrimSpace(plan.BuilderImage))
 	builder.WriteString("WORKDIR /app\n\n")
 
+	if envLines := renderBuilderEnvLines(plan); envLines != "" {
+		builder.WriteString(envLines)
+		builder.WriteString("\n")
+	}
 	if argLines := renderArgLines(buildArgKeys); argLines != "" {
 		builder.WriteString(argLines)
 	}
@@ -1015,6 +1023,15 @@ func buildCacheMounts(plan buildPlan) []cacheMount {
 		return nil
 	}
 
+	if strings.TrimSpace(plan.Runtime) == "java" {
+		command := strings.ToLower(strings.TrimSpace(plan.BuildCommand))
+		if strings.Contains(command, "mvn") || strings.Contains(command, "./mvnw") {
+			return []cacheMount{
+				cacheMountForTarget("/root/.m2", cacheIDSuffix("maven-repo")),
+			}
+		}
+	}
+
 	framework := strings.ToLower(strings.TrimSpace(plan.Framework))
 	switch framework {
 	case "next":
@@ -1224,6 +1241,27 @@ func renderEnvLines(values map[string]string) string {
 		fmt.Fprintf(&builder, "ENV %s=%s\n", key, values[key])
 	}
 	return builder.String()
+}
+
+func renderBuilderEnvLines(plan buildPlan) string {
+	values := map[string]string{}
+	if shouldClearMavenConfig(plan) {
+		values["MAVEN_CONFIG"] = ""
+	}
+	return renderEnvLines(values)
+}
+
+func shouldClearMavenConfig(plan buildPlan) bool {
+	if strings.TrimSpace(plan.Runtime) != "java" {
+		return false
+	}
+	combined := strings.Join([]string{
+		plan.InstallCommand,
+		strings.Join(plan.SetupCommands, " "),
+		plan.BuildCommand,
+		strings.Join(plan.PostBuildCommands, " "),
+	}, " ")
+	return strings.Contains(combined, "./mvnw")
 }
 
 func renderAptInstallLine(packages []string) string {

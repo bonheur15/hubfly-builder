@@ -442,6 +442,7 @@ func isTrustedGeneratedCommand(command string) bool {
 		"bun install --frozen-lockfile",
 		"python -m playwright install chromium",
 		javaSelectJarCommand(),
+		javaSelectQuarkusAppCommand(),
 		laravelRuntimeInitCommand():
 		return true
 	}
