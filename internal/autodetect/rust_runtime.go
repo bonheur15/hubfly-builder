@@ -45,7 +45,7 @@ func defaultRustExposePort(framework string) string {
 }
 
 func rustRuntimeEnv(framework, exposePort string) map[string]string {
-	env := map[string]string{}
+	env := ipv4BindRuntimeEnv("rust", framework, exposePort)
 	if strings.TrimSpace(exposePort) != "" {
 		env["PORT"] = exposePort
 	}
@@ -58,10 +58,6 @@ func rustRuntimeEnv(framework, exposePort string) map[string]string {
 		if strings.TrimSpace(exposePort) != "" {
 			env["ROCKET_PORT"] = exposePort
 		}
-	}
-
-	if len(env) == 0 {
-		return nil
 	}
 	return env
 }

@@ -232,7 +232,7 @@ func phpVersionFromComposer(repoPath string) string {
 		return ""
 	}
 	if metadata.Config != nil {
-		if v := strings.TrimSpace(metadata.Config.Platform["php"]); v != "" {
+		if v := composerPlatformValueString(metadata.Config.Platform["php"]); v != "" {
 			return v
 		}
 	}
