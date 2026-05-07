@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -12,9 +13,11 @@ import (
 )
 
 type composerJSON struct {
-	Require map[string]string `json:"require"`
-	Config  *struct {
-		Platform map[string]string `json:"platform"`
+	Require    map[string]string      `json:"require"`
+	RequireDev map[string]string      `json:"require-dev"`
+	Scripts    map[string]interface{} `json:"scripts"`
+	Config     *struct {
+		Platform map[string]interface{} `json:"platform"`
 	} `json:"config,omitempty"`
 }
 
@@ -132,7 +135,8 @@ func phpInstallCandidates(repoPath string) []string {
 }
 
 func phpBuildCandidates(repoPath string) []string {
-	framework, _, hasWebEntrypoint := detectPHPFrameworkAndDocroot(repoPath, loadComposerJSON(repoPath))
+	metadata := loadComposerJSON(repoPath)
+	framework, _, hasWebEntrypoint := detectPHPFrameworkAndDocroot(repoPath, metadata)
 	if !hasWebEntrypoint {
 		return nil
 	}
@@ -143,8 +147,25 @@ func phpBuildCandidates(repoPath string) []string {
 	case "symfony":
 		return []string{"php bin/console cache:clear --env=prod --no-debug"}
 	default:
+		if metadata != nil {
+			return append(composerBuildScriptCandidates(metadata), "composer dump-autoload --optimize")
+		}
 		return nil
 	}
+}
+
+func composerBuildScriptCandidates(metadata *composerJSON) []string {
+	if metadata == nil || len(metadata.Scripts) == 0 {
+		return nil
+	}
+
+	var candidates []string
+	for _, script := range []string{"build", "compile", "assets", "production"} {
+		if _, ok := metadata.Scripts[script]; ok {
+			candidates = append(candidates, "composer run-script "+script)
+		}
+	}
+	return candidates
 }
 
 func phpRunCandidates(repoPath string) []string {
@@ -199,6 +220,18 @@ func detectPHPFrameworkAndDocroot(appPath string, metadata *composerJSON) (strin
 			return "symfony", "web", true
 		}
 		return "symfony", "public", false
+	case composerRequires(metadata, "slim/slim", "mezzio/mezzio", "laminas/laminas-mvc"):
+		return phpComposerFrameworkDocroot(appPath, "slim", "public", ".")
+	case fileExists(filepath.Join(appPath, "spark")) || composerRequires(metadata, "codeigniter4/framework"):
+		return phpComposerFrameworkDocroot(appPath, "codeigniter", "public", ".")
+	case fileExists(filepath.Join(appPath, "bin", "cake")) || composerRequires(metadata, "cakephp/cakephp"):
+		return phpComposerFrameworkDocroot(appPath, "cakephp", "webroot", ".")
+	case composerRequires(metadata, "yiisoft/yii2"):
+		return phpComposerFrameworkDocroot(appPath, "yii", "web", ".")
+	case composerRequires(metadata, "drupal/core", "drupal/core-recommended"):
+		return phpComposerFrameworkDocroot(appPath, "drupal", "web", ".")
+	case composerRequires(metadata, "magento/product-community-edition", "magento/project-community-edition"):
+		return phpComposerFrameworkDocroot(appPath, "magento", "pub", ".")
 	case fileExists(filepath.Join(appPath, "wp-config.php")):
 		if fileExists(filepath.Join(appPath, "index.php")) {
 			return "wordpress", ".", true
@@ -215,12 +248,35 @@ func detectPHPFrameworkAndDocroot(appPath string, metadata *composerJSON) (strin
 	}
 }
 
+func phpComposerFrameworkDocroot(appPath, framework string, candidates ...string) (string, string, bool) {
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		indexPath := filepath.Join(appPath, "index.php")
+		if candidate != "." {
+			indexPath = filepath.Join(appPath, filepath.FromSlash(candidate), "index.php")
+		}
+		if fileExists(indexPath) {
+			return framework, candidate, true
+		}
+	}
+	if len(candidates) > 0 {
+		return framework, strings.TrimSpace(candidates[0]), false
+	}
+	return framework, "", false
+}
+
 func composerRequires(metadata *composerJSON, packages ...string) bool {
-	if metadata == nil || len(metadata.Require) == 0 {
+	if metadata == nil || (len(metadata.Require) == 0 && len(metadata.RequireDev) == 0) {
 		return false
 	}
 	for _, pkg := range packages {
 		if _, ok := metadata.Require[pkg]; ok {
+			return true
+		}
+		if _, ok := metadata.RequireDev[pkg]; ok {
 			return true
 		}
 	}
@@ -228,29 +284,70 @@ func composerRequires(metadata *composerJSON, packages ...string) bool {
 }
 
 func detectPHPRequiredExtensions(metadata *composerJSON) []string {
-	if metadata == nil || len(metadata.Require) == 0 {
+	if metadata == nil || (len(metadata.Require) == 0 && (metadata.Config == nil || len(metadata.Config.Platform) == 0)) {
 		return nil
 	}
 
 	seen := make(map[string]struct{})
 	var extensions []string
-	for key := range metadata.Require {
-		if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(key)), "ext-") {
-			continue
+	for _, values := range []map[string]string{metadata.Require, composerPlatformExtensions(metadata)} {
+		for key := range values {
+			if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(key)), "ext-") {
+				continue
+			}
+			name := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(key, "ext-")))
+			if name == "" {
+				continue
+			}
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			extensions = append(extensions, name)
 		}
-		name := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(key, "ext-")))
-		if name == "" {
-			continue
-		}
-		if _, ok := seen[name]; ok {
-			continue
-		}
-		seen[name] = struct{}{}
-		extensions = append(extensions, name)
 	}
 
 	sort.Strings(extensions)
 	return extensions
+}
+
+func composerPlatformExtensions(metadata *composerJSON) map[string]string {
+	if metadata == nil || metadata.Config == nil {
+		return nil
+	}
+	extensions := make(map[string]string)
+	for key, version := range metadata.Config.Platform {
+		if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(key)), "ext-") {
+			continue
+		}
+		if composerPlatformValueDisabled(version) {
+			continue
+		}
+		extensions[key] = composerPlatformValueString(version)
+	}
+	return extensions
+}
+
+func composerPlatformValueString(value interface{}) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case float64:
+		return strings.TrimSpace(fmt.Sprintf("%v", typed))
+	default:
+		return ""
+	}
+}
+
+func composerPlatformValueDisabled(value interface{}) bool {
+	switch typed := value.(type) {
+	case bool:
+		return !typed
+	case string:
+		return strings.EqualFold(strings.TrimSpace(typed), "false")
+	default:
+		return false
+	}
 }
 
 func applyPHPPlanDefaults(appPath string, plan *buildPlan) error {
@@ -285,6 +382,7 @@ func applyPHPPlanDefaults(appPath string, plan *buildPlan) error {
 
 	plan.RuntimeFlavor = detectPHPRuntimeFlavor(appPath, metadata, plan.Framework, plan.RunCommand)
 	plan.BuilderImage = selectPHPBaseImage(plan.Version, plan.RuntimeFlavor)
+	plan.PHPIniPath = phpSourcePathInContext(plan.BuildContextDir, plan.AppDir, detectPHPIniPath(appPath))
 	appEnv := "production"
 	if strings.HasPrefix(framework, "symfony") {
 		appEnv = "prod"
@@ -359,11 +457,34 @@ func detectPHPRuntimeFlavor(appPath string, metadata *composerJSON, framework, r
 		return "fpm"
 	case strings.Contains(lowerRun, "php-fpm"), strings.Contains(lowerRun, "nginx"):
 		return "fpm"
+	case hasPHPHtaccess(appPath):
+		return "apache"
 	case hasPHPNginxHint(appPath):
 		return "fpm"
 	default:
 		return "apache"
 	}
+}
+
+func hasPHPHtaccess(appPath string) bool {
+	_, docroot, hasWebEntrypoint := detectPHPFrameworkAndDocroot(appPath, loadComposerJSON(appPath))
+	for _, rel := range []string{
+		filepath.ToSlash(filepath.Join(docroot, ".htaccess")),
+		".htaccess",
+		"public/.htaccess",
+		"web/.htaccess",
+		"webroot/.htaccess",
+		"pub/.htaccess",
+	} {
+		rel = strings.Trim(rel, "/")
+		if rel == "" || rel == "." {
+			continue
+		}
+		if fileExists(filepath.Join(appPath, filepath.FromSlash(rel))) {
+			return true
+		}
+	}
+	return !hasWebEntrypoint && fileExists(filepath.Join(appPath, ".htaccess"))
 }
 
 func hasPHPNginxHint(appPath string) bool {
@@ -381,6 +502,36 @@ func hasPHPNginxHint(appPath string) bool {
 		}
 	}
 	return false
+}
+
+func detectPHPIniPath(appPath string) string {
+	for _, rel := range []string{
+		"php.ini",
+		".php.ini",
+		"docker/php.ini",
+		"docker/php/php.ini",
+		"config/php.ini",
+		".docker/php.ini",
+		"deploy/php.ini",
+		"ops/php.ini",
+	} {
+		if fileExists(filepath.Join(appPath, filepath.FromSlash(rel))) {
+			return rel
+		}
+	}
+	return ""
+}
+
+func phpSourcePathInContext(buildContextDir, appDir, rel string) string {
+	rel = strings.TrimSpace(filepath.ToSlash(rel))
+	if rel == "" {
+		return ""
+	}
+	appWorkDir := containerRelativeDir(buildContextDir, appDir)
+	if appWorkDir == "" || appWorkDir == "." {
+		return rel
+	}
+	return path.Join(appWorkDir, rel)
 }
 
 func selectPHPBaseImage(version, runtimeFlavor string) string {
@@ -481,7 +632,7 @@ func detectPHPRuntimeInitCommand(port string) string {
 	if port == "" {
 		port = "8080"
 	}
-	return fmt.Sprintf("PORT=\"${PORT:-%s}\"; sed -ri -e \"s/Listen [0-9]+/Listen ${PORT}/\" /etc/apache2/ports.conf; sed -ri -e \"s!<VirtualHost \\\\*:[0-9]+>!<VirtualHost *:${PORT}>!g\" /etc/apache2/sites-available/000-default.conf", port)
+	return fmt.Sprintf("PORT=\"${PORT:-%s}\"; sed -ri -e \"s/^Listen .*/Listen 0.0.0.0:${PORT}/\" /etc/apache2/ports.conf; sed -ri -e \"s!<VirtualHost [^>]+>!<VirtualHost 0.0.0.0:${PORT}>!g\" /etc/apache2/sites-available/000-default.conf", port)
 }
 
 func detectPHPFPMRuntimeInitCommand(port string) string {

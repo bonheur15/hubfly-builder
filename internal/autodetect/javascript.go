@@ -35,6 +35,7 @@ type buildPlan struct {
 	RuntimeEnv        map[string]string
 	AptPackages       []string
 	DocumentRoot      string
+	PHPIniPath        string
 	StaticOutputDir   string
 	UseStaticRuntime  bool
 	appWorkDir        string
@@ -94,6 +95,7 @@ func detectBuildPlan(opts AutoDetectOptions, allowed *allowlist.AllowedCommands)
 		plan.Framework = detectGoFramework(repoRoot, appPath)
 		plan.DependencyFiles = detectGoDependencyFiles(appPath)
 		plan.ExposePort = inferExposePort(defaultExposePort(runtime), run)
+		plan.RuntimeEnv = mergeRuntimeEnv(plan.RuntimeEnv, ipv4BindRuntimeEnv(runtime, plan.Framework, plan.ExposePort))
 		if err := validateBuildPlanCommands(plan, allowed); err != nil {
 			return buildPlan{}, err
 		}
@@ -109,6 +111,7 @@ func detectBuildPlan(opts AutoDetectOptions, allowed *allowlist.AllowedCommands)
 		plan.Framework = "aspnet-core"
 		plan.DependencyFiles = detectDotnetDependencyFiles(appPath)
 		plan.ExposePort = inferExposePort(defaultExposePort(runtime), run)
+		plan.RuntimeEnv = mergeRuntimeEnv(plan.RuntimeEnv, ipv4BindRuntimeEnv(runtime, plan.Framework, plan.ExposePort))
 		if err := validateBuildPlanCommands(plan, allowed); err != nil {
 			return buildPlan{}, err
 		}
@@ -179,6 +182,7 @@ func detectBuildPlan(opts AutoDetectOptions, allowed *allowlist.AllowedCommands)
 		if plan.ExposePort == "" {
 			plan.ExposePort = inferExposePort(defaultExposePort(runtime), run)
 		}
+		plan.RuntimeEnv = mergeRuntimeEnv(plan.RuntimeEnv, ipv4BindRuntimeEnv(runtime, plan.Framework, plan.ExposePort))
 		if err := validateBuildPlanCommands(plan, allowed); err != nil {
 			return buildPlan{}, err
 		}
@@ -887,22 +891,22 @@ func detectNuxtStatic(ctx jsProjectContext) bool {
 }
 
 type angularConfig struct {
-	DefaultProject string                   `json:"defaultProject"`
+	DefaultProject string                    `json:"defaultProject"`
 	Projects       map[string]angularProject `json:"projects"`
 }
 
 type angularProject struct {
-	Root      string                  `json:"root"`
+	Root      string                   `json:"root"`
 	Architect map[string]angularTarget `json:"architect"`
 	Targets   map[string]angularTarget `json:"targets"`
 }
 
 type angularTarget struct {
-	Builder             string                    `json:"builder"`
-	Executor            string                    `json:"executor"`
-	DefaultConfiguration string                   `json:"defaultConfiguration"`
-	Options             map[string]any            `json:"options"`
-	Configurations      map[string]map[string]any `json:"configurations"`
+	Builder              string                    `json:"builder"`
+	Executor             string                    `json:"executor"`
+	DefaultConfiguration string                    `json:"defaultConfiguration"`
+	Options              map[string]any            `json:"options"`
+	Configurations       map[string]map[string]any `json:"configurations"`
 }
 
 func loadAngularConfig(ctx jsProjectContext) (angularConfig, string, string, bool) {
@@ -1590,7 +1594,6 @@ func normalizeViteOutputDir(value string) string {
 	}
 	return cleaned
 }
-
 
 func packageManagerAddCommand(packageManager, dependency string) string {
 	dependency = strings.TrimSpace(dependency)
