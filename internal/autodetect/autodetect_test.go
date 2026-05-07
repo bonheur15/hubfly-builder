@@ -281,6 +281,7 @@ func phpAllowedCommands() *allowlist.AllowedCommands {
 		},
 		Build: []string{
 			"composer dump-autoload --optimize",
+			"composer run-script build",
 			"php artisan optimize",
 			"php bin/console cache:clear --env=prod --no-debug",
 		},
@@ -505,10 +506,10 @@ func TestAutoDetectBuildConfigViteUsesStaticRuntime(t *testing.T) {
 	if !strings.Contains(dockerfile, "COPY --from=builder /app/dist/ ./") {
 		t.Fatalf("expected dist copy in Dockerfile, got:\n%s", dockerfile)
 	}
-	if !strings.Contains(dockerfile, "listen 80;") {
+	if !strings.Contains(dockerfile, "listen 0.0.0.0:80;") {
 		t.Fatalf("expected nginx to listen on port 80 for static runtime, got:\n%s", dockerfile)
 	}
-	if !strings.Contains(dockerfile, "listen 8080;") {
+	if !strings.Contains(dockerfile, "listen 0.0.0.0:8080;") {
 		t.Fatalf("expected nginx to listen on port 8080 for static runtime, got:\n%s", dockerfile)
 	}
 	if !strings.Contains(dockerfile, "EXPOSE 80") || !strings.Contains(dockerfile, "EXPOSE 8080") {
@@ -872,6 +873,15 @@ tokio = { version = "1", features = ["full"] }
 	dockerfile := string(cfg.DockerfileContent)
 	if !strings.Contains(dockerfile, "ENV HOST=0.0.0.0") {
 		t.Fatalf("expected HOST env in Dockerfile, got:\n%s", dockerfile)
+	}
+	if !strings.Contains(dockerfile, "ENV BIND_ADDR=0.0.0.0:3000") {
+		t.Fatalf("expected BIND_ADDR env in Dockerfile, got:\n%s", dockerfile)
+	}
+	if !strings.Contains(dockerfile, "ENV LISTEN_ADDR=0.0.0.0:3000") {
+		t.Fatalf("expected LISTEN_ADDR env in Dockerfile, got:\n%s", dockerfile)
+	}
+	if !strings.Contains(dockerfile, "ENV SERVER_ADDR=0.0.0.0:3000") {
+		t.Fatalf("expected SERVER_ADDR env in Dockerfile, got:\n%s", dockerfile)
 	}
 	if !strings.Contains(dockerfile, "ENV PORT=3000") {
 		t.Fatalf("expected PORT env in Dockerfile, got:\n%s", dockerfile)
@@ -2083,6 +2093,100 @@ func TestAutoDetectBuildConfigPHPFPMNginxModeAndPECL(t *testing.T) {
 		if !strings.Contains(dockerfile, snippet) {
 			t.Fatalf("expected Dockerfile to contain %q, got:\n%s", snippet, dockerfile)
 		}
+	}
+}
+
+func TestAutoDetectBuildConfigPHPSlimComposerPHPIniAndPlatformExtensions(t *testing.T) {
+	repo := t.TempDir()
+	payload := map[string]interface{}{
+		"name": "sample/slim-app",
+		"require": map[string]string{
+			"slim/slim": "^4.0",
+		},
+		"scripts": map[string]interface{}{
+			"build": "php vendor/bin/some-build",
+		},
+		"config": map[string]interface{}{
+			"platform": map[string]string{
+				"ext-redis": "*",
+			},
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("failed to marshal composer.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "composer.json"), data, 0o644); err != nil {
+		t.Fatalf("failed to write composer.json: %v", err)
+	}
+	touchFile(t, repo, "composer.lock")
+	if err := os.MkdirAll(filepath.Join(repo, "public"), 0o755); err != nil {
+		t.Fatalf("failed to create public dir: %v", err)
+	}
+	touchFile(t, filepath.Join(repo, "public"), "index.php")
+	if err := os.MkdirAll(filepath.Join(repo, "docker"), 0o755); err != nil {
+		t.Fatalf("failed to create docker dir: %v", err)
+	}
+	touchFile(t, filepath.Join(repo, "docker"), "php.ini")
+
+	cfg, err := AutoDetectBuildConfig(repo, phpAllowedCommands())
+	if err != nil {
+		t.Fatalf("AutoDetectBuildConfig returned error: %v", err)
+	}
+
+	if cfg.Framework != "slim" {
+		t.Fatalf("expected slim framework, got %q", cfg.Framework)
+	}
+	if cfg.BuildCommand != "composer run-script build" {
+		t.Fatalf("expected composer build script, got %q", cfg.BuildCommand)
+	}
+	dockerfile := string(cfg.DockerfileContent)
+	for _, snippet := range []string{
+		"FROM php:8.3-apache",
+		"COPY docker/php.ini /usr/local/etc/php/conf.d/99-hubfly-app.ini",
+		"RUN printf \"\\n\" | pecl install redis",
+		"RUN docker-php-ext-enable redis",
+		"RUN composer run-script build",
+	} {
+		if !strings.Contains(dockerfile, snippet) {
+			t.Fatalf("expected Dockerfile to contain %q, got:\n%s", snippet, dockerfile)
+		}
+	}
+}
+
+func TestAutoDetectBuildConfigPHPHtaccessPrefersApacheOverNginxHint(t *testing.T) {
+	repo := t.TempDir()
+	writeComposerJSON(t, repo, map[string]string{
+		"slim/slim": "^4.0",
+	})
+	touchFile(t, repo, "composer.lock")
+	touchFile(t, repo, "nginx.conf")
+	if err := os.MkdirAll(filepath.Join(repo, "public"), 0o755); err != nil {
+		t.Fatalf("failed to create public dir: %v", err)
+	}
+	touchFile(t, filepath.Join(repo, "public"), "index.php")
+	touchFile(t, filepath.Join(repo, "public"), ".htaccess")
+
+	cfg, err := AutoDetectBuildConfig(repo, phpAllowedCommands())
+	if err != nil {
+		t.Fatalf("AutoDetectBuildConfig returned error: %v", err)
+	}
+
+	if cfg.RunCommand != "apache2-foreground" {
+		t.Fatalf("expected apache runtime command, got %q", cfg.RunCommand)
+	}
+	dockerfile := string(cfg.DockerfileContent)
+	for _, snippet := range []string{
+		"FROM php:8.3-apache",
+		"RUN a2enmod rewrite",
+		"AllowOverride All",
+	} {
+		if !strings.Contains(dockerfile, snippet) {
+			t.Fatalf("expected Dockerfile to contain %q, got:\n%s", snippet, dockerfile)
+		}
+	}
+	if strings.Contains(dockerfile, "FROM php:8.3-fpm") {
+		t.Fatalf("did not expect fpm image when .htaccess is present, got:\n%s", dockerfile)
 	}
 }
 

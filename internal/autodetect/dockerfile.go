@@ -2,6 +2,7 @@ package autodetect
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -304,15 +305,15 @@ func renderApplicationDockerfile(plan buildPlan, buildArgKeys, secretBuildKeys [
 		builder.WriteString("COPY ")
 		builder.WriteString(strings.Join(depFiles, " "))
 		builder.WriteString(" ./\n\n")
-	installCaches := installCacheMounts(plan)
-	if len(installCaches) > 0 && !containsKey(buildArgKeys, "HBF_CACHE_ID") {
-		builder.WriteString("ARG HBF_CACHE_ID=default\n\n")
-	}
-	for _, command := range []string{plan.InstallCommand} {
-		if runLine := renderRunLineWithCaches(command, installCaches, secretBuildKeys); runLine != "" {
-			builder.WriteString(runLine)
+		installCaches := installCacheMounts(plan)
+		if len(installCaches) > 0 && !containsKey(buildArgKeys, "HBF_CACHE_ID") {
+			builder.WriteString("ARG HBF_CACHE_ID=default\n\n")
 		}
-	}
+		for _, command := range []string{plan.InstallCommand} {
+			if runLine := renderRunLineWithCaches(command, installCaches, secretBuildKeys); runLine != "" {
+				builder.WriteString(runLine)
+			}
+		}
 		for _, command := range preSetupCommands {
 			if runLine := renderRunLine(command, secretBuildKeys); runLine != "" {
 				builder.WriteString(runLine)
@@ -321,15 +322,15 @@ func renderApplicationDockerfile(plan buildPlan, buildArgKeys, secretBuildKeys [
 		builder.WriteString("COPY . .\n\n")
 	} else {
 		builder.WriteString("COPY . .\n\n")
-	installCaches := installCacheMounts(plan)
-	if len(installCaches) > 0 && !containsKey(buildArgKeys, "HBF_CACHE_ID") {
-		builder.WriteString("ARG HBF_CACHE_ID=default\n\n")
-	}
-	for _, command := range []string{plan.InstallCommand} {
-		if runLine := renderRunLineWithCaches(command, installCaches, secretBuildKeys); runLine != "" {
-			builder.WriteString(runLine)
+		installCaches := installCacheMounts(plan)
+		if len(installCaches) > 0 && !containsKey(buildArgKeys, "HBF_CACHE_ID") {
+			builder.WriteString("ARG HBF_CACHE_ID=default\n\n")
 		}
-	}
+		for _, command := range []string{plan.InstallCommand} {
+			if runLine := renderRunLineWithCaches(command, installCaches, secretBuildKeys); runLine != "" {
+				builder.WriteString(runLine)
+			}
+		}
 		postSetupCommands = append(preSetupCommands, postSetupCommands...)
 	}
 	for _, command := range postSetupCommands {
@@ -791,6 +792,9 @@ func renderPHPDockerfile(plan buildPlan, buildArgKeys, secretBuildKeys []string)
 	if strings.TrimSpace(plan.RuntimeFlavor) == "fpm" {
 		builder.WriteString(renderPHPFPMNginxTemplate(plan.DocumentRoot))
 	}
+	if phpIni := strings.TrimSpace(plan.PHPIniPath); phpIni != "" {
+		fmt.Fprintf(&builder, "COPY %s /usr/local/etc/php/conf.d/99-hubfly-app.ini\n", strings.TrimPrefix(filepath.ToSlash(phpIni), "/"))
+	}
 	if runLine := renderRunLine(plan.InstallCommand, secretBuildKeys); runLine != "" {
 		builder.WriteString(runLine)
 	}
@@ -909,9 +913,9 @@ func renderStaticDockerfile(plan buildPlan, buildArgKeys, secretBuildKeys []stri
 
 	builder.WriteString("RUN rm -f /etc/nginx/conf.d/default.conf && mkdir -p /etc/nginx/templates && cat <<'EOF' > /etc/nginx/templates/default.conf.template\n")
 	builder.WriteString("server {\n")
-	builder.WriteString("  listen 80;\n")
+	builder.WriteString("  listen 0.0.0.0:80;\n")
 	if exposePort != "80" {
-		fmt.Fprintf(&builder, "  listen %s;\n", exposePort)
+		fmt.Fprintf(&builder, "  listen 0.0.0.0:%s;\n", exposePort)
 	}
 	builder.WriteString("  server_name _;\n")
 	builder.WriteString("  root /usr/share/nginx/html;\n")
@@ -1265,7 +1269,7 @@ func renderPHPFPMNginxTemplate(docroot string) string {
 	var builder strings.Builder
 	builder.WriteString("RUN mkdir -p /etc/nginx/templates && cat <<'EOF' > /etc/nginx/templates/hubfly-default.conf.template\n")
 	builder.WriteString("server {\n")
-	builder.WriteString("  listen __PORT__;\n")
+	builder.WriteString("  listen 0.0.0.0:__PORT__;\n")
 	builder.WriteString("  server_name _;\n")
 	fmt.Fprintf(&builder, "  root %s;\n", target)
 	builder.WriteString("  index index.php index.html;\n")

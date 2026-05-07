@@ -362,6 +362,10 @@ func manualRuntimeBuildPlan(appPath, runtime, version, appDir, buildContextDir s
 			plan.RuntimeEnv["PORT"] = plan.ExposePort
 		}
 	}
+	switch runtime {
+	case "python", "go", "rust", "dotnet", "java", "elixir":
+		plan.RuntimeEnv = mergeRuntimeEnv(plan.RuntimeEnv, ipv4BindRuntimeEnv(runtime, plan.Framework, plan.ExposePort))
+	}
 
 	if runtime == "static" {
 		if strings.TrimSpace(plan.InstallCommand) != "" || len(plan.SetupCommands) > 0 || strings.TrimSpace(plan.BuildCommand) != "" || len(plan.PostBuildCommands) > 0 {
