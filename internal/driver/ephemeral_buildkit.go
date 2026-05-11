@@ -37,6 +37,7 @@ type EphemeralBuildKitOpts struct {
 	CPULimit          float64
 	MemoryMB          int
 	UseSoftLimits     bool
+	DockerConfigPath  string
 }
 
 type EphemeralBuildKit struct {
@@ -210,6 +211,9 @@ func buildEphemeralBuildKitRunArgs(opts EphemeralBuildKitOpts, containerName, co
 	}
 	if strings.TrimSpace(configPath) != "" {
 		args = append(args, "-v", configPath+":"+ephemeralBuildKitConfigMountPath+":ro")
+	}
+	if strings.TrimSpace(opts.DockerConfigPath) != "" {
+		args = append(args, "-v", opts.DockerConfigPath+":/root/.docker/config.json:ro")
 	}
 
 	args = appendResourceLimits(args, opts)

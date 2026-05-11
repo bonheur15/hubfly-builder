@@ -106,7 +106,7 @@ func (w *Worker) Run() error {
 	}
 	w.applyNetworkBandwidth(requestedNetwork, 800, 800)
 
-	cloneCmd := w.execCommand("git", "clone", w.job.SourceInfo.GitRepository, w.workDir)
+	cloneCmd := w.execCommand("git", "clone", "--depth=1", w.job.SourceInfo.GitRepository, w.workDir)
 	if err := w.executeCommand(cloneCmd); err != nil {
 		w.log("ERROR: failed to clone repository: %v", err)
 		return w.failForStep(err, "failed to clone repository")
@@ -284,6 +284,7 @@ func (w *Worker) Run() error {
 		CPULimit:          cpuLimit,
 		MemoryMB:          memLimit,
 		UseSoftLimits:     useSoftLimits,
+		DockerConfigPath:  dockerConfigPath(),
 	})
 	if startErr != nil {
 		w.log("ERROR: failed to start ephemeral BuildKit daemon: %v", startErr)
@@ -362,6 +363,7 @@ func (w *Worker) Run() error {
 			CacheDir:       cacheDirFromEnv(),
 			CacheKeys:      w.cacheKeysForBuild(w.job.BuildConfig.Runtime, w.job.BuildConfig.Version, w.job.BuildConfig.InstallCommand, w.job.BuildConfig.BuildCommand),
 			CacheRefs:      w.cacheRefsForBuild(w.job.BuildConfig.Runtime, w.job.BuildConfig.Version, w.job.BuildConfig.InstallCommand, w.job.BuildConfig.BuildCommand),
+			DirectPush:     dockerConfigPath() != "",
 		}
 		if err := w.buildAndPushImage(activeBuildKit, opts); err != nil {
 			w.log("ERROR: host-managed image export/push failed: %v", err)
@@ -459,6 +461,7 @@ func (w *Worker) Run() error {
 			CacheDir:       cacheDirFromEnv(),
 			CacheKeys:      w.cacheKeysForBuild(w.job.BuildConfig.Runtime, w.job.BuildConfig.Version, w.job.BuildConfig.InstallCommand, w.job.BuildConfig.BuildCommand),
 			CacheRefs:      w.cacheRefsForBuild(w.job.BuildConfig.Runtime, w.job.BuildConfig.Version, w.job.BuildConfig.InstallCommand, w.job.BuildConfig.BuildCommand),
+			DirectPush:     dockerConfigPath() != "",
 		}
 		if err := w.buildAndPushImage(activeBuildKit, opts); err != nil {
 			w.log("ERROR: host-managed image export/push failed: %v", err)
@@ -587,6 +590,16 @@ func (w *Worker) commandOutput(cmd *exec.Cmd) (string, error) {
 }
 
 func (w *Worker) buildAndPushImage(activeBuildKit *driver.BuildKit, opts driver.BuildOpts) error {
+	if opts.DirectPush {
+		w.log("Starting direct BuildKit build and push to registry: %s", opts.ImageTag)
+		buildCmd := activeBuildKit.BuildCommandContext(w.ctx, opts)
+		if err := w.executeCommand(buildCmd); err != nil {
+			return fmt.Errorf("buildctl direct push failed: %w", err)
+		}
+		w.log("Direct BuildKit push successful.")
+		return nil
+	}
+
 	exportDir, err := os.MkdirTemp("", fmt.Sprintf("hubfly-builder-image-%s-", w.job.ID))
 	if err != nil {
 		return fmt.Errorf("create image export directory: %w", err)
@@ -1038,6 +1051,19 @@ func cacheBackendFromEnv() string {
 
 func cacheDirFromEnv() string {
 	return strings.TrimSpace(os.Getenv("BUILDKIT_CACHE_DIR"))
+}
+
+func dockerConfigPath() string {
+	if val := strings.TrimSpace(os.Getenv("DOCKER_CONFIG_PATH")); val != "" {
+		return val
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		path := filepath.Join(home, ".docker", "config.json")
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return ""
 }
 
 func resolveWorkspacePath(repoRoot, workingDir string) (string, string, error) {

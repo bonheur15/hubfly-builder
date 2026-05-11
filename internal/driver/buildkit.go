@@ -90,7 +90,7 @@ func (bk *BuildKit) BuildCommandContext(ctx context.Context, opts BuildOpts) *ex
 	default:
 		for _, cacheRef := range normalizedCacheRefs(opts.CacheRefs, opts.CacheRef) {
 			args = append(args, "--import-cache", fmt.Sprintf("type=registry,ref=%s", cacheRef))
-			args = append(args, "--export-cache", fmt.Sprintf("type=registry,ref=%s,mode=min", cacheRef))
+			args = append(args, "--export-cache", fmt.Sprintf("type=registry,ref=%s,mode=max", cacheRef))
 		}
 	}
 
