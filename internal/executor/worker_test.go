@@ -71,7 +71,6 @@ func TestNormalizeDockerfileBuildContextRejectsSiblingContext(t *testing.T) {
 
 func TestGenerateImageTagUsesRefFallbackWhenCommitMissing(t *testing.T) {
 	worker := &Worker{
-		registry: "registry.example.com:5000",
 		job: &storage.BuildJob{
 			ID:        "build_test",
 			ProjectID: "proj_test",
@@ -86,7 +85,24 @@ func TestGenerateImageTagUsesRefFallbackWhenCommitMissing(t *testing.T) {
 	if strings.Contains(tag, ":-b") {
 		t.Fatalf("expected non-empty image tag source component, got %q", tag)
 	}
+	if !strings.HasPrefix(tag, "hubcell.local/user-test/proj-test:") {
+		t.Fatalf("expected hubcell.local image tag, got %q", tag)
+	}
 	if !strings.Contains(tag, ":main-bbuild_test-v") {
 		t.Fatalf("expected ref fallback in image tag, got %q", tag)
+	}
+}
+
+func TestHubcellBuildPathUsesDotForRootDockerfile(t *testing.T) {
+	got := hubcellBuildPath("/tmp/repo", "/tmp/repo/Dockerfile")
+	if got != "." {
+		t.Fatalf("expected root Dockerfile path to use '.', got %q", got)
+	}
+}
+
+func TestHubcellBuildPathUsesDirectoryForNestedDockerfile(t *testing.T) {
+	got := hubcellBuildPath("/tmp/repo", "/tmp/repo/apps/web/Dockerfile")
+	if got != "/tmp/repo/apps/web" {
+		t.Fatalf("expected nested Dockerfile directory, got %q", got)
 	}
 }

@@ -15,7 +15,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -33,10 +32,10 @@ import (
 var ErrBuildFailed = errors.New("build failed")
 
 const (
-	dockerPushMaxAttempts = 3
-	dockerPushRetryDelay  = 2 * time.Second
-	defaultBuildTimeout   = 15 * time.Minute
-	bandwidthAPIBaseURL   = "http://localhost:10006"
+	defaultBuildTimeout         = 15 * time.Minute
+	bandwidthAPIBaseURL         = "http://localhost:10006"
+	defaultHubcellCPUPeriod     = int64(100000)
+	defaultHubcellRootfsInitial = "10g"
 )
 
 type Worker struct {
@@ -45,7 +44,6 @@ type Worker struct {
 	logManager *logs.LogManager
 	allowlist  *allowlist.AllowedCommands
 	apiClient  *api.Client
-	registry   string
 	logFile    *os.File
 	logWriter  io.Writer
 	workDir    string
@@ -53,14 +51,13 @@ type Worker struct {
 	cancel     context.CancelFunc
 }
 
-func NewWorker(job *storage.BuildJob, storage *storage.Storage, logManager *logs.LogManager, allowlist *allowlist.AllowedCommands, apiClient *api.Client, registry string) *Worker {
+func NewWorker(job *storage.BuildJob, storage *storage.Storage, logManager *logs.LogManager, allowlist *allowlist.AllowedCommands, apiClient *api.Client) *Worker {
 	return &Worker{
 		job:        job,
 		storage:    storage,
 		logManager: logManager,
 		allowlist:  allowlist,
 		apiClient:  apiClient,
-		registry:   registry,
 	}
 }
 
@@ -258,50 +255,24 @@ func (w *Worker) Run() error {
 		}
 	}
 
-	buildSecrets, cleanupSecrets, err := w.prepareBuildSecrets(envResult.BuildSecrets)
-	if err != nil {
-		w.log("ERROR: could not prepare build secrets: %v", err)
-		return w.failJob("failed to prepare build secrets")
-	}
-	defer cleanupSecrets()
-
-	w.log("Starting ephemeral BuildKit daemon for network: %s", requestedNetwork)
 	limits := w.job.BuildConfig.ResourceLimits
-	useSoftLimits := limits.CPU > 0 || limits.MemoryMB > 0
 	cpuLimit := limits.CPU
 	memLimit := limits.MemoryMB
-	if !useSoftLimits {
+	if cpuLimit <= 0 {
 		cpuLimit = 2
+	}
+	if memLimit <= 0 {
 		memLimit = 4096
 	}
-	ephemeralSession, startErr := driver.StartEphemeralBuildKit(w.ctx, driver.EphemeralBuildKitOpts{
-		JobID:             w.job.ID,
-		UserNetwork:       requestedNetwork,
-		Registry:          w.registry,
-		RegistryPlainHTTP: registryPlainHTTPFromEnv(),
-		CacheDir:          cacheDirFromEnv(),
-		UseLocalCache:     strings.EqualFold(cacheBackendFromEnv(), "local"),
-		CPULimit:          cpuLimit,
-		MemoryMB:          memLimit,
-		UseSoftLimits:     useSoftLimits,
-	})
-	if startErr != nil {
-		w.log("ERROR: failed to start ephemeral BuildKit daemon: %v", startErr)
-		return w.failForStep(startErr, "failed to start ephemeral BuildKit daemon")
+	if len(envResult.BuildSecrets) > 0 {
+		w.log("WARNING: build-time secrets were resolved, but hubcell build CLI does not accept secret mounts; secret values will not be passed to the build")
 	}
-	defer func() {
-		if stopErr := ephemeralSession.Stop(); stopErr != nil {
-			w.log("WARNING: failed to clean up ephemeral BuildKit cell %s: %v", ephemeralSession.ContainerName, stopErr)
-		}
-	}()
-	w.log("Ephemeral BuildKit ready: cell=%s userNetwork=%s addr=%s", ephemeralSession.ContainerName, ephemeralSession.UserNetwork, ephemeralSession.Addr)
-	activeBuildKit := driver.NewBuildKit(ephemeralSession.Addr)
 
 	if hasExistingDockerfile {
 		if hasCustomDockerfile {
-			w.log("Custom Dockerfile staged in context, starting BuildKit build...")
+			w.log("Custom Dockerfile staged in context, starting Hubcell build...")
 		} else {
-			w.log("Dockerfile found in context, starting BuildKit build...")
+			w.log("Dockerfile found in context, starting Hubcell build...")
 		}
 
 		var stagedDockerfile []byte
@@ -346,28 +317,22 @@ func (w *Worker) Run() error {
 
 		imageTag := w.generateImageTag()
 		w.log("Image tag: %s", imageTag)
-		baseBuildArgs := envResult.BuildArgs
-		if !hasCustomDockerfile {
-			baseBuildArgs = dockerfileparams.BuildArgs(baseBuildArgs, w.job.BuildConfig.DockerfileArgs, w.job.BuildConfig.DockerfileEnv)
+		opts := driver.HubcellBuildOpts{
+			HubcellPath: hubcellCLIPathFromEnv(),
+			WorkDir:     w.workDir,
+			ContextPath: hubcellBuildPath(w.workDir, dockerfilePath),
+			ImageTag:    imageTag,
+			Network:     requestedNetwork,
+			MemoryBytes: memoryMBToBytes(memLimit),
+			CPUPeriod:   defaultHubcellCPUPeriod,
+			CPUQuota:    cpuToQuota(cpuLimit, defaultHubcellCPUPeriod),
 		}
-		buildArgs := buildArgsWithCacheID(baseBuildArgs, w.cacheMountID())
-
-		opts := driver.BuildOpts{
-			ContextPath:    buildContext,
-			DockerfilePath: filepath.Dir(dockerfilePath),
-			ImageTag:       imageTag,
-			BuildArgs:      buildArgs,
-			Secrets:        buildSecrets,
-			CacheBackend:   cacheBackendFromEnv(),
-			CacheDir:       cacheDirFromEnv(),
-			CacheKeys:      w.cacheKeysForBuild(w.job.BuildConfig.Runtime, w.job.BuildConfig.Version, w.job.BuildConfig.InstallCommand, w.job.BuildConfig.BuildCommand),
-			CacheRefs:      w.cacheRefsForBuild(w.job.BuildConfig.Runtime, w.job.BuildConfig.Version, w.job.BuildConfig.InstallCommand, w.job.BuildConfig.BuildCommand),
+		applyDefaultHubcellRootfs(&opts)
+		if err := w.buildImageWithHubcell(opts); err != nil {
+			w.log("ERROR: hubcell build failed: %v", err)
+			return w.failForStep(err, "failed to build image with hubcell")
 		}
-		if err := w.buildAndPushImage(activeBuildKit, opts); err != nil {
-			w.log("ERROR: host-managed image export/push failed: %v", err)
-			return w.failForStep(err, "failed to export and push built image")
-		}
-		w.log("BuildKit build export and host push successful.")
+		w.log("Hubcell build successful.")
 		w.applyNetworkBandwidth(requestedNetwork, 15, 15)
 		w.job.ImageTag = imageTag
 		if err := w.storage.UpdateJobImageTag(w.job.ID, imageTag); err != nil {
@@ -444,27 +409,26 @@ func (w *Worker) Run() error {
 			return w.failJob("failed to write generated Dockerfile")
 		}
 
-		w.log("Dockerfile generated successfully, starting BuildKit build...")
+		w.log("Dockerfile generated successfully, starting Hubcell build...")
 		imageTag := w.generateImageTag()
 		w.log("Image tag: %s", imageTag)
-		buildArgs := buildArgsWithCacheID(envResult.BuildArgs, w.cacheMountID())
 
-		opts := driver.BuildOpts{
-			ContextPath:    buildContext,
-			DockerfilePath: buildContext,
-			ImageTag:       imageTag,
-			BuildArgs:      buildArgs,
-			Secrets:        buildSecrets,
-			CacheBackend:   cacheBackendFromEnv(),
-			CacheDir:       cacheDirFromEnv(),
-			CacheKeys:      w.cacheKeysForBuild(w.job.BuildConfig.Runtime, w.job.BuildConfig.Version, w.job.BuildConfig.InstallCommand, w.job.BuildConfig.BuildCommand),
-			CacheRefs:      w.cacheRefsForBuild(w.job.BuildConfig.Runtime, w.job.BuildConfig.Version, w.job.BuildConfig.InstallCommand, w.job.BuildConfig.BuildCommand),
+		opts := driver.HubcellBuildOpts{
+			HubcellPath: hubcellCLIPathFromEnv(),
+			WorkDir:     w.workDir,
+			ContextPath: hubcellBuildPath(w.workDir, dockerfilePath),
+			ImageTag:    imageTag,
+			Network:     requestedNetwork,
+			MemoryBytes: memoryMBToBytes(memLimit),
+			CPUPeriod:   defaultHubcellCPUPeriod,
+			CPUQuota:    cpuToQuota(cpuLimit, defaultHubcellCPUPeriod),
 		}
-		if err := w.buildAndPushImage(activeBuildKit, opts); err != nil {
-			w.log("ERROR: host-managed image export/push failed: %v", err)
-			return w.failForStep(err, "failed to export and push built image")
+		applyDefaultHubcellRootfs(&opts)
+		if err := w.buildImageWithHubcell(opts); err != nil {
+			w.log("ERROR: hubcell build failed: %v", err)
+			return w.failForStep(err, "failed to build image with hubcell")
 		}
-		w.log("BuildKit build export and host push successful.")
+		w.log("Hubcell build successful.")
 		w.applyNetworkBandwidth(requestedNetwork, 15, 15)
 		w.job.ImageTag = imageTag
 		if err := w.storage.UpdateJobImageTag(w.job.ID, imageTag); err != nil {
@@ -586,81 +550,48 @@ func (w *Worker) commandOutput(cmd *exec.Cmd) (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
-func (w *Worker) buildAndPushImage(activeBuildKit *driver.BuildKit, opts driver.BuildOpts) error {
-	exportDir, err := os.MkdirTemp("", fmt.Sprintf("hubfly-builder-image-%s-", w.job.ID))
-	if err != nil {
-		return fmt.Errorf("create image export directory: %w", err)
-	}
-	defer os.RemoveAll(exportDir)
-
-	exportPath := filepath.Join(exportDir, "image.tar")
-	opts.ExportPath = exportPath
-
-	w.log("Exporting BuildKit image archive to host path: %s", exportPath)
-	buildCmd := activeBuildKit.BuildCommandContext(w.ctx, opts)
-	if err := w.executeCommand(buildCmd); err != nil {
-		return fmt.Errorf("buildctl export failed: %w", err)
-	}
-
-	w.log("Loading exported image archive into host Docker daemon")
-	if err := w.executeCommand(w.execCommand("docker", "load", "-i", exportPath)); err != nil {
-		return fmt.Errorf("docker load failed: %w", err)
-	}
-
-	if err := w.verifyLocalImageTag(opts.ImageTag); err != nil {
+func (w *Worker) buildImageWithHubcell(opts driver.HubcellBuildOpts) error {
+	if err := driver.ValidateHubcellBuildOpts(opts); err != nil {
 		return err
 	}
-
-	defer func() {
-		if cleanupErr := w.removeLocalImage(opts.ImageTag); cleanupErr != nil {
-			w.log("WARNING: failed to remove local image %s after push workflow: %v", opts.ImageTag, cleanupErr)
-		}
-	}()
-
-	if err := w.pushLocalImage(opts.ImageTag); err != nil {
-		return err
-	}
-
-	return nil
+	w.log("Building image with Hubcell CLI: tag=%s path=%s network=%s memoryBytes=%d cpuPeriod=%d cpuQuota=%d",
+		opts.ImageTag,
+		opts.ContextPath,
+		opts.Network,
+		opts.MemoryBytes,
+		opts.CPUPeriod,
+		opts.CPUQuota,
+	)
+	return w.executeCommand(driver.HubcellBuildCommandContext(w.ctx, opts))
 }
 
-func (w *Worker) verifyLocalImageTag(imageTag string) error {
-	w.log("Verifying local Docker image tag exists: %s", imageTag)
-	if err := w.executeCommand(w.execCommand("docker", "image", "inspect", imageTag)); err != nil {
-		return fmt.Errorf("loaded Docker image %q is not available locally: %w", imageTag, err)
+func applyDefaultHubcellRootfs(opts *driver.HubcellBuildOpts) {
+	if opts.RootfsInitialSize == "" {
+		opts.RootfsInitialSize = defaultHubcellRootfsInitial
 	}
-	return nil
 }
 
-func (w *Worker) pushLocalImage(imageTag string) error {
-	var lastErr error
-	for attempt := 1; attempt <= dockerPushMaxAttempts; attempt++ {
-		w.log("Pushing image to registry from host daemon (attempt %d/%d): %s", attempt, dockerPushMaxAttempts, imageTag)
-		if err := w.executeCommand(w.execCommand("docker", "push", imageTag)); err != nil {
-			lastErr = err
-			if attempt < dockerPushMaxAttempts {
-				if w.isTimeoutError(err) {
-					break
-				}
-				w.log("WARNING: docker push attempt %d failed for %s: %v", attempt, imageTag, err)
-				time.Sleep(dockerPushRetryDelay)
-				continue
-			}
-			break
-		}
-		w.log("Host-side docker push successful: %s", imageTag)
-		return nil
+func hubcellBuildPath(repoRoot, dockerfilePath string) string {
+	dockerfileDir := filepath.Clean(filepath.Dir(dockerfilePath))
+	repoRoot = filepath.Clean(repoRoot)
+	if dockerfileDir == repoRoot {
+		return "."
 	}
-
-	return fmt.Errorf("docker push failed after %d attempts for %s: %w", dockerPushMaxAttempts, imageTag, lastErr)
+	return dockerfileDir
 }
 
-func (w *Worker) removeLocalImage(imageTag string) error {
-	w.log("Removing local Docker image from host daemon: %s", imageTag)
-	if err := w.executeCommand(exec.Command("docker", "image", "rm", "-f", imageTag)); err != nil {
-		return err
+func memoryMBToBytes(memoryMB int) int64 {
+	if memoryMB <= 0 {
+		return 0
 	}
-	return nil
+	return int64(memoryMB) * 1024 * 1024
+}
+
+func cpuToQuota(cpu float64, period int64) int64 {
+	if cpu <= 0 || period <= 0 {
+		return 0
+	}
+	return int64(cpu*float64(period) + 0.5)
 }
 
 func (w *Worker) applyNetworkBandwidth(networkName string, egressMbps, ingressMbps int) {
@@ -728,144 +659,7 @@ func (w *Worker) generateImageTag() string {
 	}
 	sanitizedUserID := sanitize(w.job.UserID)
 	sanitizedProjectID := sanitize(w.job.ProjectID)
-	return fmt.Sprintf("%s/%s/%s:%s-b%s-v%s", w.registry, sanitizedUserID, sanitizedProjectID, shortSha, w.job.ID, ts)
-}
-
-func (w *Worker) cacheRef() string {
-	if w.registry == "" || w.job == nil {
-		return ""
-	}
-
-	userID := sanitizeImageTagComponent(w.job.UserID)
-	projectID := sanitizeImageTagComponent(w.job.ProjectID)
-	if userID == "" || projectID == "" {
-		return ""
-	}
-
-	return fmt.Sprintf("%s/hubfly-cache/%s/%s:buildcache", w.registry, userID, projectID)
-}
-
-func (w *Worker) cacheKey() string {
-	if w.job == nil {
-		return ""
-	}
-	userID := sanitizeImageTagComponent(w.job.UserID)
-	projectID := sanitizeImageTagComponent(w.job.ProjectID)
-	if userID == "" || projectID == "" {
-		return ""
-	}
-	return filepath.Join("hubfly-cache", userID, projectID)
-}
-
-func (w *Worker) cacheMountID() string {
-	if w.job == nil {
-		return ""
-	}
-	userID := sanitizeImageTagComponent(w.job.UserID)
-	projectID := sanitizeImageTagComponent(w.job.ProjectID)
-	if userID == "" || projectID == "" {
-		return ""
-	}
-	return fmt.Sprintf("hubfly-%s-%s", userID, projectID)
-}
-
-func buildArgsWithCacheID(base map[string]string, cacheID string) map[string]string {
-	if len(base) == 0 && strings.TrimSpace(cacheID) == "" {
-		return base
-	}
-	out := make(map[string]string, len(base)+1)
-	for key, value := range base {
-		out[key] = value
-	}
-	if strings.TrimSpace(cacheID) != "" {
-		out["HBF_CACHE_ID"] = cacheID
-	}
-	return out
-}
-
-func (w *Worker) cacheRefsForBuild(runtime, version, installCommand, buildCommand string) []string {
-	refs := make([]string, 0, 2)
-	if projectRef := w.cacheRef(); projectRef != "" {
-		refs = append(refs, projectRef)
-	}
-	if sharedRef := w.sharedCacheRef(runtime, version, installCommand, buildCommand); sharedRef != "" {
-		refs = append(refs, sharedRef)
-	}
-	return refs
-}
-
-func (w *Worker) cacheKeysForBuild(runtime, version, installCommand, buildCommand string) []string {
-	keys := make([]string, 0, 2)
-	if projectKey := w.cacheKey(); projectKey != "" {
-		keys = append(keys, projectKey)
-	}
-	if sharedKey := sharedCacheKey(runtime, version, installCommand, buildCommand); sharedKey != "" {
-		keys = append(keys, sharedKey)
-	}
-	return keys
-}
-
-func (w *Worker) sharedCacheRef(runtime, version, installCommand, buildCommand string) string {
-	if w.registry == "" {
-		return ""
-	}
-
-	runtime = sanitizeImageTagComponent(strings.ToLower(strings.TrimSpace(runtime)))
-	version = sanitizeImageTagComponent(strings.TrimSpace(version))
-	if runtime == "" || version == "" {
-		return ""
-	}
-
-	flavor := sharedCacheFlavor(runtime, installCommand, buildCommand)
-	keyParts := []string{runtime, version}
-	if flavor != "" {
-		keyParts = append(keyParts, flavor)
-	}
-	cacheKey := strings.Join(keyParts, "-")
-	return fmt.Sprintf("%s/hubfly-cache/shared/%s:buildcache", w.registry, cacheKey)
-}
-
-func sharedCacheKey(runtime, version, installCommand, buildCommand string) string {
-	runtime = sanitizeImageTagComponent(strings.ToLower(strings.TrimSpace(runtime)))
-	version = sanitizeImageTagComponent(strings.TrimSpace(version))
-	if runtime == "" || version == "" {
-		return ""
-	}
-
-	flavor := sharedCacheFlavor(runtime, installCommand, buildCommand)
-	keyParts := []string{runtime, version}
-	if flavor != "" {
-		keyParts = append(keyParts, flavor)
-	}
-	cacheKey := strings.Join(keyParts, "-")
-	return filepath.Join("hubfly-cache", "shared", cacheKey)
-}
-
-func sharedCacheFlavor(runtime, installCommand, buildCommand string) string {
-	switch runtime {
-	case "node":
-		return "bookworm-slim"
-	case "python":
-		return "slim"
-	case "go":
-		return "alpine"
-	case "php":
-		return "apache"
-	case "static":
-		return "nginx-alpine"
-	case "java":
-		combined := strings.ToLower(strings.TrimSpace(installCommand + " " + buildCommand))
-		switch {
-		case strings.Contains(combined, "gradle"), strings.Contains(combined, "./gradlew"):
-			return "gradle"
-		case strings.Contains(combined, "mvn"), strings.Contains(combined, "./mvnw"):
-			return "maven"
-		default:
-			return "jdk"
-		}
-	default:
-		return ""
-	}
+	return fmt.Sprintf("hubcell.local/%s/%s:%s-b%s-v%s", sanitizedUserID, sanitizedProjectID, shortSha, w.job.ID, ts)
 }
 
 func (w *Worker) logResolvedEnvPlan(entries []storage.ResolvedEnvVar) {
@@ -877,39 +671,6 @@ func (w *Worker) logResolvedEnvPlan(entries []storage.ResolvedEnvVar) {
 	for _, entry := range entries {
 		w.log("Env auto-resolution: key=%s scope=%s secret=%t reason=%s", entry.Key, entry.Scope, entry.Secret, entry.Reason)
 	}
-}
-
-func (w *Worker) prepareBuildSecrets(secretValues map[string]string) ([]driver.BuildSecret, func(), error) {
-	if len(secretValues) == 0 {
-		return nil, func() {}, nil
-	}
-
-	secretDir, err := os.MkdirTemp("", fmt.Sprintf("hubfly-builder-secrets-%s-", w.job.ID))
-	if err != nil {
-		return nil, nil, err
-	}
-
-	keys := make([]string, 0, len(secretValues))
-	for key := range secretValues {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	secrets := make([]driver.BuildSecret, 0, len(keys))
-	for idx, key := range keys {
-		secretPath := filepath.Join(secretDir, fmt.Sprintf("%03d_%s", idx, sanitizeSecretFilename(key)))
-		if err := os.WriteFile(secretPath, []byte(secretValues[key]), 0600); err != nil {
-			_ = os.RemoveAll(secretDir)
-			return nil, nil, err
-		}
-		secrets = append(secrets, driver.BuildSecret{ID: key, Src: secretPath})
-	}
-
-	cleanup := func() {
-		_ = os.RemoveAll(secretDir)
-	}
-
-	return secrets, cleanup, nil
 }
 
 func sanitizeCommandForLog(cmd *exec.Cmd) string {
@@ -938,29 +699,6 @@ func redactBuildArg(arg string) string {
 
 	eq += start
 	return arg[:eq+1] + "<redacted>"
-}
-
-func sanitizeSecretFilename(value string) string {
-	var builder strings.Builder
-	for _, ch := range value {
-		switch {
-		case ch >= 'a' && ch <= 'z':
-			builder.WriteRune(ch)
-		case ch >= 'A' && ch <= 'Z':
-			builder.WriteRune(ch)
-		case ch >= '0' && ch <= '9':
-			builder.WriteRune(ch)
-		case ch == '-', ch == '_', ch == '.':
-			builder.WriteRune(ch)
-		default:
-			builder.WriteByte('_')
-		}
-	}
-
-	if builder.Len() == 0 {
-		return "secret"
-	}
-	return builder.String()
 }
 
 func copyStringMap(values map[string]string) map[string]string {
@@ -1015,29 +753,8 @@ func sanitizeImageTagComponent(value string) string {
 	return cleaned
 }
 
-func registryPlainHTTPFromEnv() bool {
-	value := strings.TrimSpace(os.Getenv("REGISTRY_PLAIN_HTTP"))
-	if value == "" {
-		value = strings.TrimSpace(os.Getenv("REGISTRY_INSECURE"))
-	}
-	switch strings.ToLower(value) {
-	case "1", "true", "yes", "y", "on":
-		return true
-	default:
-		return false
-	}
-}
-
-func cacheBackendFromEnv() string {
-	value := strings.TrimSpace(os.Getenv("BUILDKIT_CACHE_BACKEND"))
-	if value == "" {
-		value = "registry"
-	}
-	return strings.ToLower(value)
-}
-
-func cacheDirFromEnv() string {
-	return strings.TrimSpace(os.Getenv("BUILDKIT_CACHE_DIR"))
+func hubcellCLIPathFromEnv() string {
+	return strings.TrimSpace(os.Getenv("HUBCELL_CLI_PATH"))
 }
 
 func resolveWorkspacePath(repoRoot, workingDir string) (string, string, error) {
