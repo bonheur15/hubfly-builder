@@ -365,8 +365,7 @@ func TestAutoDetectBuildConfigJavaQuarkusMavenWrapperClearsMavenConfig(t *testin
 	for _, snippet := range []string{
 		"ENV MAVEN_CONFIG=",
 		"RUN chmod +x mvnw",
-		"ARG HBF_CACHE_ID=default",
-		"RUN --mount=type=cache,target=/root/.m2,id=${HBF_CACHE_ID}-maven-repo ./mvnw -DoutputFile=target/mvn-dependency-list.log -B -DskipTests clean dependency:list install -Pproduction",
+		"RUN ./mvnw -DoutputFile=target/mvn-dependency-list.log -B -DskipTests clean dependency:list install -Pproduction",
 		"cp -R \"$dir\" /app/quarkus-app",
 		"for jar in target/*-runner.jar build/*-runner.jar",
 		"cp \"$jar\" /app/quarkus-app/quarkus-run.jar",

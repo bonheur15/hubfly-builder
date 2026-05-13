@@ -6,13 +6,10 @@ import (
 	"io"
 	"log"
 	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"hubfly-builder/internal/allowlist"
 	"hubfly-builder/internal/api"
-	"hubfly-builder/internal/driver"
 	"hubfly-builder/internal/executor"
 	"hubfly-builder/internal/logs"
 	"hubfly-builder/internal/offline"
@@ -26,34 +23,23 @@ const logRetentionDays = 7
 
 const (
 	defaultHubcellBaseURL = "http://127.0.0.1:10012"
+	defaultHubcellCLIPath = "/home/destroyer/Desktop/hubfly-cloud/hubcell/hubcell"
 	defaultCallbackURL    = "https://hubfly.space/api/builds/callback"
-	defaultRegistryURL    = "127.0.0.1:10009"
-	defaultCacheBackend   = "local"
-	defaultCacheDir       = "data/buildkit-cache"
 	defaultServerAddr     = ":10008"
 	defaultUploadAddr     = ":10011"
 )
 
 var version = "dev"
 
-const (
-	projectCacheRetentionDays = 30
-	sharedCacheRetentionDays  = 15
-)
-
 type EnvConfig struct {
 	HubcellBaseURL string `json:"HUBCELL_BASE_URL"`
-	RegistryURL    string `json:"REGISTRY_URL"`
+	HubcellCLIPath string `json:"HUBCELL_CLI_PATH"`
 	CallbackURL    string `json:"CALLBACK_URL"`
-	CacheBackend   string `json:"BUILDKIT_CACHE_BACKEND"`
-	CacheDir       string `json:"BUILDKIT_CACHE_DIR"`
 }
 
 func applyDefaultEnvConfig() {
 	setEnvIfEmpty("HUBCELL_BASE_URL", defaultHubcellBaseURL)
-	setEnvIfEmpty("REGISTRY_URL", defaultRegistryURL)
-	setEnvIfEmpty("BUILDKIT_CACHE_BACKEND", defaultCacheBackend)
-	setEnvIfEmpty("BUILDKIT_CACHE_DIR", defaultCacheDir)
+	setEnvIfEmpty("HUBCELL_CLI_PATH", defaultHubcellCLIPath)
 	setEnvIfEmpty("CALLBACK_URL", defaultCallbackURL)
 }
 
@@ -80,14 +66,8 @@ func loadOptionalEnvConfig() {
 	if config.HubcellBaseURL != "" {
 		os.Setenv("HUBCELL_BASE_URL", config.HubcellBaseURL)
 	}
-	if config.RegistryURL != "" {
-		os.Setenv("REGISTRY_URL", config.RegistryURL)
-	}
-	if config.CacheBackend != "" {
-		os.Setenv("BUILDKIT_CACHE_BACKEND", config.CacheBackend)
-	}
-	if config.CacheDir != "" {
-		os.Setenv("BUILDKIT_CACHE_DIR", config.CacheDir)
+	if config.HubcellCLIPath != "" {
+		os.Setenv("HUBCELL_CLI_PATH", config.HubcellCLIPath)
 	}
 	if config.CallbackURL != "" {
 		os.Setenv("CALLBACK_URL", config.CallbackURL)
@@ -97,93 +77,6 @@ func loadOptionalEnvConfig() {
 func setEnvIfEmpty(key, value string) {
 	if os.Getenv(key) == "" {
 		os.Setenv(key, value)
-	}
-}
-
-func ensureBuildKitCacheDir() {
-	if strings.ToLower(strings.TrimSpace(os.Getenv("BUILDKIT_CACHE_BACKEND"))) != "local" {
-		return
-	}
-
-	cacheDir := strings.TrimSpace(os.Getenv("BUILDKIT_CACHE_DIR"))
-	if cacheDir == "" {
-		return
-	}
-
-	absCacheDir, err := filepath.Abs(cacheDir)
-	if err != nil {
-		log.Printf("WARN: could not resolve BUILDKIT_CACHE_DIR %q: %v", cacheDir, err)
-		return
-	}
-	if err := os.MkdirAll(absCacheDir, 0o755); err != nil {
-		log.Printf("WARN: could not create BUILDKIT_CACHE_DIR %q: %v", absCacheDir, err)
-		return
-	}
-	os.Setenv("BUILDKIT_CACHE_DIR", absCacheDir)
-}
-
-func cleanupBuildKitCacheDir() {
-	if strings.ToLower(strings.TrimSpace(os.Getenv("BUILDKIT_CACHE_BACKEND"))) != "local" {
-		return
-	}
-
-	cacheDir := strings.TrimSpace(os.Getenv("BUILDKIT_CACHE_DIR"))
-	if cacheDir == "" {
-		return
-	}
-
-	base := filepath.Join(cacheDir, "hubfly-cache")
-	pruneSharedCache(filepath.Join(base, "shared"), time.Duration(sharedCacheRetentionDays)*24*time.Hour)
-	pruneProjectCache(base, time.Duration(projectCacheRetentionDays)*24*time.Hour)
-}
-
-func pruneSharedCache(sharedDir string, retention time.Duration) {
-	pruneChildDirs(sharedDir, retention)
-}
-
-func pruneProjectCache(baseDir string, retention time.Duration) {
-	entries, err := os.ReadDir(baseDir)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			log.Printf("WARN: could not read cache directory %q: %v", baseDir, err)
-		}
-		return
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() || entry.Name() == "shared" {
-			continue
-		}
-		userDir := filepath.Join(baseDir, entry.Name())
-		pruneChildDirs(userDir, retention)
-	}
-}
-
-func pruneChildDirs(root string, retention time.Duration) {
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			log.Printf("WARN: could not read cache directory %q: %v", root, err)
-		}
-		return
-	}
-
-	cutoff := time.Now().Add(-retention)
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		fullPath := filepath.Join(root, entry.Name())
-		info, err := entry.Info()
-		if err != nil {
-			log.Printf("WARN: could not stat cache directory %q: %v", fullPath, err)
-			continue
-		}
-		if info.ModTime().Before(cutoff) {
-			if err := os.RemoveAll(fullPath); err != nil {
-				log.Printf("WARN: could not remove cache directory %q: %v", fullPath, err)
-			}
-		}
 	}
 }
 
@@ -204,10 +97,7 @@ func main() {
 
 	applyDefaultEnvConfig()
 	loadOptionalEnvConfig()
-	ensureBuildKitCacheDir()
-	cleanupBuildKitCacheDir()
 
-	registry := os.Getenv("REGISTRY_URL")
 	callbackURL := os.Getenv("CALLBACK_URL") // e.g., "http://localhost:3000/api/builds/callback"
 	allowedCommands := allowlist.DefaultAllowedCommands()
 
@@ -238,15 +128,12 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.LUTC)
 	log.Printf("System log file: %s", systemLogPath)
 	log.Printf(
-		"Env: HUBCELL_BASE_URL=%q REGISTRY_URL=%q CALLBACK_URL=%q",
+		"Env: HUBCELL_BASE_URL=%q HUBCELL_CLI_PATH=%q CALLBACK_URL=%q",
 		os.Getenv("HUBCELL_BASE_URL"),
-		os.Getenv("REGISTRY_URL"),
+		os.Getenv("HUBCELL_CLI_PATH"),
 		os.Getenv("CALLBACK_URL"),
 	)
-	log.Printf("Effective: REGISTRY_URL=%q CALLBACK_URL=%q", registry, callbackURL)
-	if err := driver.CleanupOrphanedEphemeralBuildKits(); err != nil {
-		log.Printf("WARN: could not cleanup stale ephemeral BuildKit cells: %v", err)
-	}
+	log.Printf("Effective: CALLBACK_URL=%q", callbackURL)
 
 	// Start log cleanup routine
 	go func() {
@@ -262,10 +149,10 @@ func main() {
 
 	apiClient := api.NewClient(callbackURL)
 
-	manager := executor.NewManager(storage, logManager, allowedCommands, apiClient, registry, maxConcurrentBuilds)
+	manager := executor.NewManager(storage, logManager, allowedCommands, apiClient, maxConcurrentBuilds)
 	go manager.Start()
 
-	uploadServer := uploadserver.NewServer(callbackURL, registry)
+	uploadServer := uploadserver.NewServer(callbackURL)
 	go func() {
 		log.Printf("Image upload server listening on %s", defaultUploadAddr)
 		if err := uploadServer.Start(defaultUploadAddr); err != nil {

@@ -1,7 +1,0 @@
-debug = true
-
-[dns]
-  nameservers = ["1.1.1.1", "8.8.8.8"]
-
-[registry."docker.io"]
-  mirrors = ["mirror.gcr.io"]

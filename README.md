@@ -1,17 +1,17 @@
 # Hubfly Builder
 
-**Hubfly Builder** Is a high-performance, standalone Go service designed to orchestrate container image builds using [BuildKit](https://github.com/moby/buildkit). It provides a robust API for managing build jobs, supports automatic runtime detection, uses a built-in command allowlist for generated commands, and ensures persistence through a local SQLite database.
+**Hubfly Builder** Is a high-performance, standalone Go service designed to orchestrate container image builds through the Hubcell native build CLI. It provides a robust API for managing build jobs, supports automatic runtime detection, uses a built-in command allowlist for generated commands, and ensures persistence through a local SQLite database.
 
 ## Architecture & Features
 
 - **Built with Go:** High-performance, concurrent execution model.
-- **BuildKit Backend:** Leverages the advanced features of BuildKit for efficient and secure image building.
+- **Hubcell Native Build Backend:** Runs `sudo hubcell build` directly for image builds.
 - **SQLite Persistence:** All job metadata, status, and history are stored locally, allowing the builder to resume operations after restarts.
 - **Auto-Detection (Zero-Config):** Automatically detects the runtime (Node.js, Bun, Go, Python, Java, etc.) and generates an optimized Dockerfile if one isn't provided.
 - **Secure by Design:** Auto-detected commands are validated against a built-in allowlist.
 - **Structured Logging:** Job logs are captured, stored locally, and served via API.
 - **Backend Integration:** Reports build outcomes (success/failure) via configurable webhooks.
-- **Host-Managed Registry Pushes:** BuildKit exports image archives to the host, and the builder loads, pushes, and cleans them up through the host Docker daemon.
+- **Hubcell Local Images:** Generated image tags use the `hubcell.local` registry expected by Hubcell builds.
 - **Resource Management:** Supports configurable per-job resource limits (CPU/Memory).
 - **Cleanup Automation:** Automatically prunes build workspaces and implements log retention policies.
 
@@ -25,8 +25,8 @@ The builder can be configured via environment variables or an optional JSON over
 
 | Key | Description | Default / Example |
 | :--- | :--- | :--- |
-| `HUBCELL_BASE_URL` | Hubcell API base URL used to run ephemeral BuildKit cells | `http://127.0.0.1:10012` |
-| `REGISTRY_URL` | Default registry to push images to | `127.0.0.1:10009` |
+| `HUBCELL_BASE_URL` | Hubcell API base URL used by ancillary Hubcell integrations | `http://127.0.0.1:10012` |
+| `HUBCELL_CLI_PATH` | Hubcell executable path, or a directory containing `hubcell` | `/home/destroyer/Desktop/hubfly-cloud/hubcell/hubcell` |
 | `CALLBACK_URL` | Backend webhook for reporting results | `https://hubfly.space/api/builds/callback` |
 
 Example optional `configs/env.json`:
@@ -34,14 +34,14 @@ Example optional `configs/env.json`:
 ```json
 {
   "HUBCELL_BASE_URL": "http://127.0.0.1:10012",
-  "REGISTRY_URL": "127.0.0.1:10009",
+  "HUBCELL_CLI_PATH": "/home/destroyer/Desktop/hubfly-cloud/hubcell",
   "CALLBACK_URL": "https://hubfly.space/api/builds/callback"
 }
 ```
 
-### BuildKit Configuration
+### Hubcell Build Configuration
 
-Ephemeral BuildKit now runs as a Hubcell cell. Hubcell `/v1/cells/run` does not support Docker-style host bind mounts, so `configs/buildkitd.toml` is not mounted automatically. Bake custom BuildKit config into the BuildKit image or pass supported `buildkitd` flags through the Hubcell launch integration.
+Build jobs call `sudo <HUBCELL_CLI_PATH> build` with the job image tag, requested network, memory bytes, CPU period/quota, and rootfs sizing flags.
 
 ---
 
@@ -80,10 +80,10 @@ If a `Dockerfile` exists in the context, it takes precedence over auto-detection
 ## Image Tagging Scheme
 
 Images are tagged according to the following pattern:
-`{REGISTRY}/{USER_ID}/{PROJECT_ID}:{SHORT_COMMIT_SHA}-b{BUILD_ID}-v{TIMESTAMP}`
+`hubcell.local/{USER_ID}/{PROJECT_ID}:{SHORT_COMMIT_SHA}-b{BUILD_ID}-v{TIMESTAMP}`
 
 **Example:**
-`registry.hubfly.com/user-123/my-app:abc123456789-b-build-456-v20260210T123000Z`
+`hubcell.local/user-123/my-app:abc123456789-b-build-456-v20260210T123000Z`
 
 ---
 
@@ -143,7 +143,7 @@ Creates a new build job and queues it for execution.
 - Public-prefixed vars (e.g. `NEXT_PUBLIC_`, `VITE_`) are resolved as `both` (build + runtime).
 - Keys with build evidence (`Dockerfile ARG`/reference or known build config references) are resolved to `build`.
 - Unknown keys default to `runtime`.
-- Unknown/sensitive keys default to `secret` and are mounted as BuildKit secrets for build-time usage.
+- Unknown/sensitive keys default to `secret`; native Hubcell builds currently log a warning because the CLI does not accept secret mounts.
 - The resolved result is returned as `buildConfig.resolvedEnvPlan` and callback metadata (`runtimeEnvKeys`).
 
 `buildConfig.envOverrides` is optional:
@@ -152,8 +152,8 @@ Creates a new build job and queues it for execution.
 - `secret` (`true`/`false`) forces whether the key is mounted as a build secret vs passed as build-arg when build scope is active.
 
 `buildConfig.dockerfileArgs` and `buildConfig.dockerfileEnv` are optional and only apply when a `Dockerfile` is found in the repository:
-- `dockerfileArgs` are injected as Dockerfile `ARG` declarations and passed as BuildKit build args.
-- `dockerfileEnv` entries are injected as `ARG` + `ENV` declarations and passed as BuildKit build args.
+- `dockerfileArgs` are injected as Dockerfile `ARG` declarations.
+- `dockerfileEnv` entries are injected as `ARG` + `ENV` declarations.
 - These fields are ignored for generated Dockerfiles and for `customDockerfile`.
 - Do not put secrets in `dockerfileEnv`; `ENV` values are baked into the resulting image.
 
@@ -170,8 +170,8 @@ Creates a new build job and queues it for execution.
 - Example: `"customDockerfile": "FROM node:22-alpine\nWORKDIR /app\nCOPY . .\nRUN npm ci\nCMD [\"npm\", \"start\"]\n"`
 
 `buildConfig.network` is required:
-- The worker starts an ephemeral `buildkitd` Hubcell cell for every job on the requested Hubcell virtual network and uses that cell address for builder-to-daemon communication.
-- Build requests do not grant the `network.host` entitlement and do not force Dockerfile `RUN` steps into host networking.
+- The worker passes this value to `hubcell build --network`.
+- Build requests do not add Linux capabilities.
 - If missing/empty, the job is rejected with `no user network provided`.
 
 ### Gateway Port Mapping
@@ -190,7 +190,7 @@ Callback payload excerpt:
 {
   "id": "build_uuid_123",
   "status": "success",
-  "imageTag": "registry.hubfly.com/user-123/my-app:abc123-bbuild_uuid_123-v20260210T123000Z",
+  "imageTag": "hubcell.local/user-123/my-app:abc123-bbuild_uuid_123-v20260210T123000Z",
   "exposePort": "8080"
 }
 ```
@@ -266,8 +266,8 @@ Clears all jobs from the SQLite database. **Use with caution.**
 | :--- | :--- | :--- |
 | `pending` | 201 | Job created, waiting for worker. |
 | `claimed` | - | Job picked up by a worker. |
-| `building` | - | BuildKit or Git operations in progress. |
-| `success` | - | Build and push completed successfully. |
+| `building` | - | Hubcell build or Git operations in progress. |
+| `success` | - | Build completed successfully. |
 | `failed` | - | An error occurred during the build process. |
 | `canceled` | - | Job was manually terminated. |
 
@@ -277,12 +277,12 @@ Clears all jobs from the SQLite database. **Use with caution.**
 
 ### Linux Prerequisites
 
-The builder is intended to run on Linux with Hubcell and Docker available locally. Hubcell runs the ephemeral BuildKit daemon cells; Docker is still used by the host-managed image export/push workflow.
+The builder is intended to run on Linux with Hubcell available locally. Hubcell performs native Dockerfile builds and stores the resulting image under `hubcell.local`.
 
 Required commands:
 
-- `docker`
-- `buildctl`
+- `sudo`
+- the Hubcell CLI referenced by `HUBCELL_CLI_PATH`
 - `git`
 
 To build the binary from source, you also need a working Go toolchain installed locally.
@@ -298,36 +298,29 @@ Before starting the builder, verify the host is ready:
 
 ```bash
 curl -fsS "$HUBCELL_BASE_URL/v1/cells" >/dev/null
-docker version
-buildctl --version
+sudo "$HUBCELL_CLI_PATH" build --help
 git --version
 ```
 
 The builder process must be able to:
 
 - talk to the Hubcell API
-- talk to the Docker daemon
+- run the Hubcell CLI through `sudo`
 - clone Git repositories over the network
-- push built images to the configured registry
 - write to `./data` and `./log`
-
-If you run it as a non-root user, that user normally needs access to Docker, for example through the `docker` group.
 
 ### Builder Runtime Notes
 
 For each job, the builder:
 
 - clones the repository into a temporary workspace
-- ensures the requested Hubcell virtual network exists
-- starts an ephemeral `buildkitd` Hubcell cell on that virtual network with host access enabled so host-side `buildctl` can connect
-- runs the build through `buildctl`
-- exports the built image as a Docker archive back to the host
-- loads that archive into the host Docker daemon
-- pushes the image to `REGISTRY_URL` from the host
-- removes the local Docker image after the push attempt finishes
-- removes the temporary workspace and the ephemeral BuildKit cell
+- generates or stages the Dockerfile when needed
+- generates a `hubcell.local/<user>/<project>:<source>-b<job>-v<timestamp>` image tag
+- runs `sudo <HUBCELL_CLI_PATH> build -t <generated-image-tag> --network <request-buildConfig.network> -m <bytes> --cpu-period <period> --cpu-quota <quota> --rootfs-initial-size 10g <dockerfile-directory>`
+- records the resulting image tag
+- removes the temporary workspace
 
-The Hubcell virtual network named by `buildConfig.network` is created automatically with masquerading enabled when needed.
+The Hubcell virtual network named by `buildConfig.network` is passed directly to the Hubcell build CLI.
 
 ### Build From Source
 ```bash
@@ -375,10 +368,9 @@ This command prints only the version string.
 
 ### First-Run Checklist
 
-- ensure Docker is running
 - ensure Hubcell is running and reachable through `HUBCELL_BASE_URL`
-- ensure `buildctl` is installed
-- ensure `REGISTRY_URL` is reachable from the builder host
+- ensure `HUBCELL_CLI_PATH` points to the Hubcell CLI or its containing directory
+- ensure the builder user can run the Hubcell CLI through `sudo`
 - ensure `CALLBACK_URL` is reachable from the builder host
 - ensure the process user can write `./data` and `./log`
 
@@ -386,34 +378,17 @@ This command prints only the version string.
 
 ## Utility Commands
 
-### Checking Local Registry
-
-If you are running a local registry, you can list repositories and tags using:
-
-```bash
-# List all repositories
-curl -s http://127.0.0.1:10009/v2/_catalog | jq
-
-# List tags for a specific image
-curl -s http://127.0.0.1:10009/v2/user-123/my-awesome-project/tags/list | jq
-```
-
-### Inspecting BuildKit
-
-To see the current BuildKit status for a running ephemeral daemon (use the `addr=` value from job logs):
-
-```bash
-buildctl --addr tcp://<ephemeral-buildkit-ip>:1234 debug workers
-```
-
 ### Manual Build Test
 
-To test a build manually using `buildctl` against an ephemeral daemon:
+To test a build manually using the configured Hubcell CLI:
 
 ```bash
-buildctl --addr tcp://<ephemeral-buildkit-ip>:1234 build \
-  --frontend=dockerfile.v0 \
-  --local context=. \
-  --local dockerfile=. \
-  --output type=image,name=127.0.0.1:10009/test-image:latest,push=true
+sudo "$HUBCELL_CLI_PATH" build \
+  -t hubcell.local/test-image:latest \
+  --network project-network-demo \
+  -m 4294967296 \
+  --cpu-period 100000 \
+  --cpu-quota 200000 \
+  --rootfs-initial-size 10g \
+  .
 ```
