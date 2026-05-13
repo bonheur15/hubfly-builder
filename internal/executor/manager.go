@@ -20,7 +20,6 @@ type Manager struct {
 	logManager    *logs.LogManager
 	allowlist     *allowlist.AllowedCommands
 	apiClient     *api.Client
-	registry      string
 	maxConcurrent int
 	activeBuilds  map[string]bool
 	activeUsers   map[string]bool
@@ -28,13 +27,12 @@ type Manager struct {
 	newJobSignal  chan struct{}
 }
 
-func NewManager(storage *storage.Storage, logManager *logs.LogManager, allowlist *allowlist.AllowedCommands, apiClient *api.Client, registry string, maxConcurrent int) *Manager {
+func NewManager(storage *storage.Storage, logManager *logs.LogManager, allowlist *allowlist.AllowedCommands, apiClient *api.Client, maxConcurrent int) *Manager {
 	return &Manager{
 		storage:       storage,
 		logManager:    logManager,
 		allowlist:     allowlist,
 		apiClient:     apiClient,
-		registry:      registry,
 		maxConcurrent: maxConcurrent,
 		activeBuilds:  make(map[string]bool),
 		activeUsers:   make(map[string]bool),
@@ -100,7 +98,7 @@ func (m *Manager) tryToDispatchJob() {
 		return
 	}
 
-	worker := NewWorker(job, m.storage, m.logManager, m.allowlist, m.apiClient, m.registry)
+	worker := NewWorker(job, m.storage, m.logManager, m.allowlist, m.apiClient)
 	go func() {
 		defer func() {
 			m.mu.Lock()
