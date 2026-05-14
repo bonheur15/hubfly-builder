@@ -25,6 +25,12 @@ func TestHubcellBuildCommandUsesSudoAndResourceFlags(t *testing.T) {
 	}
 	for _, want := range []string{
 		"sudo " + hubcellDir + "/hubcell build",
+		"--verbose",
+		"--cap-add CHOWN",
+		"--cap-add FOWNER",
+		"--cap-add FSETID",
+		"--cap-add SETUID",
+		"--cap-add SETGID",
 		"-t hubcell.local/user/project:tag",
 		"--network project-net",
 		"-m 4294967296",
@@ -38,7 +44,7 @@ func TestHubcellBuildCommandUsesSudoAndResourceFlags(t *testing.T) {
 		}
 	}
 
-	for _, forbidden := range []string{"cap-add", "SYS_ADMIN", "rootfs-virtual-size", "rootfs-grow-step", " /tmp/context/Dockerfile"} {
+	for _, forbidden := range []string{"KILL", "NET_BIND_SERVICE", "SETFCAP", "SYS_CHROOT", "SYS_ADMIN", "rootfs-virtual-size", "rootfs-grow-step", " /tmp/context/Dockerfile"} {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("did not expect %q in command: %q", forbidden, got)
 		}

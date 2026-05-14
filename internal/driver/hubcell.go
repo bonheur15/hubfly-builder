@@ -10,6 +10,14 @@ import (
 	"strings"
 )
 
+var hubcellBuildCapabilities = []string{
+	"CHOWN",
+	"FOWNER",
+	"FSETID",
+	"SETUID",
+	"SETGID",
+}
+
 type HubcellBuildOpts struct {
 	HubcellPath       string
 	WorkDir           string
@@ -28,7 +36,13 @@ func HubcellBuildCommand(opts HubcellBuildOpts) *exec.Cmd {
 
 func HubcellBuildCommandContext(ctx context.Context, opts HubcellBuildOpts) *exec.Cmd {
 	hubcellPath := ResolveHubcellCLIPath(opts.HubcellPath)
-	args := []string{hubcellPath, "build", "-t", opts.ImageTag}
+	args := []string{hubcellPath, "build", "--verbose"}
+
+	for _, capability := range hubcellBuildCapabilities {
+		args = append(args, "--cap-add", capability)
+	}
+
+	args = append(args, "-t", opts.ImageTag)
 
 	if network := strings.TrimSpace(opts.Network); network != "" {
 		args = append(args, "--network", network)

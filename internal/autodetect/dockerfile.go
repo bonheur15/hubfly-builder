@@ -1,6 +1,7 @@
 package autodetect
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -1071,13 +1072,68 @@ func renderCmdLine(command, initCommand string) string {
 		parts = append(parts, initCommand)
 	}
 	if command != "" {
-		if useExecForCommand(command) {
-			parts = append(parts, "exec "+command)
-		} else {
-			parts = append(parts, command)
+		parts = append(parts, shellCommandPart(command))
+	}
+
+	if initCommand == "" {
+		if args := directCmdArgs(command); len(args) > 0 {
+			return renderJSONCmdLine(args)
 		}
 	}
-	return fmt.Sprintf("CMD %s\n", strings.Join(parts, "; "))
+
+	return renderJSONCmdLine([]string{"/bin/sh", "-c", strings.Join(parts, "; ")})
+}
+
+func shellCommandPart(command string) string {
+	if useExecForCommand(command) {
+		return "exec " + command
+	}
+	return command
+}
+
+func renderJSONCmdLine(args []string) string {
+	quoted := make([]string, 0, len(args))
+	for _, part := range args {
+		payload, err := json.Marshal(part)
+		if err != nil {
+			return ""
+		}
+		quoted = append(quoted, string(payload))
+	}
+	return fmt.Sprintf("CMD [%s]\n", strings.Join(quoted, ", "))
+}
+
+func directCmdArgs(command string) []string {
+	command = strings.TrimSpace(command)
+	if command == "" || commandNeedsShell(command) {
+		return nil
+	}
+
+	parts := strings.Fields(command)
+	if len(parts) == 0 || hasEnvAssignmentPrefix(parts) {
+		return nil
+	}
+	return parts
+}
+
+func commandNeedsShell(command string) bool {
+	return strings.ContainsAny(command, "&;|<>$`'\"\\(){}[]*?!~") || strings.HasPrefix(command, "cd ")
+}
+
+func hasEnvAssignmentPrefix(parts []string) bool {
+	if len(parts) == 0 || !strings.Contains(parts[0], "=") {
+		return false
+	}
+	name := strings.SplitN(parts[0], "=", 2)[0]
+	if name == "" {
+		return false
+	}
+	for _, r := range name {
+		if (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 func renderEntrypointLine(command string) string {
@@ -1125,24 +1181,7 @@ func renderEnvLines(values map[string]string) string {
 }
 
 func renderBuilderEnvLines(plan buildPlan) string {
-	values := map[string]string{}
-	if shouldClearMavenConfig(plan) {
-		values["MAVEN_CONFIG"] = ""
-	}
-	return renderEnvLines(values)
-}
-
-func shouldClearMavenConfig(plan buildPlan) bool {
-	if strings.TrimSpace(plan.Runtime) != "java" {
-		return false
-	}
-	combined := strings.Join([]string{
-		plan.InstallCommand,
-		strings.Join(plan.SetupCommands, " "),
-		plan.BuildCommand,
-		strings.Join(plan.PostBuildCommands, " "),
-	}, " ")
-	return strings.Contains(combined, "./mvnw")
+	return ""
 }
 
 func renderAptInstallLine(packages []string) string {

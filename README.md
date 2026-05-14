@@ -41,7 +41,7 @@ Example optional `configs/env.json`:
 
 ### Hubcell Build Configuration
 
-Build jobs call `sudo <HUBCELL_CLI_PATH> build` with the job image tag, requested network, memory bytes, CPU period/quota, and rootfs sizing flags.
+Build jobs call `sudo <HUBCELL_CLI_PATH> build` with the job image tag, required build capabilities, requested network, memory bytes, CPU period/quota, and rootfs sizing flags.
 
 ---
 
@@ -171,7 +171,7 @@ Creates a new build job and queues it for execution.
 
 `buildConfig.network` is required:
 - The worker passes this value to `hubcell build --network`.
-- Build requests do not add Linux capabilities.
+- Build requests add only `CHOWN`, `FOWNER`, `FSETID`, `SETUID`, and `SETGID`.
 - If missing/empty, the job is rejected with `no user network provided`.
 
 ### Gateway Port Mapping
@@ -316,7 +316,7 @@ For each job, the builder:
 - clones the repository into a temporary workspace
 - generates or stages the Dockerfile when needed
 - generates a `hubcell.local/<user>/<project>:<source>-b<job>-v<timestamp>` image tag
-- runs `sudo <HUBCELL_CLI_PATH> build -t <generated-image-tag> --network <request-buildConfig.network> -m <bytes> --cpu-period <period> --cpu-quota <quota> --rootfs-initial-size 10g <dockerfile-directory>`
+- runs `sudo <HUBCELL_CLI_PATH> build --verbose --cap-add CHOWN --cap-add FOWNER --cap-add FSETID --cap-add SETUID --cap-add SETGID -t <generated-image-tag> --network <request-buildConfig.network> -m <bytes> --cpu-period <period> --cpu-quota <quota> --rootfs-initial-size 10g <dockerfile-directory>`
 - records the resulting image tag
 - removes the temporary workspace
 
@@ -384,6 +384,12 @@ To test a build manually using the configured Hubcell CLI:
 
 ```bash
 sudo "$HUBCELL_CLI_PATH" build \
+  --verbose \
+  --cap-add CHOWN \
+  --cap-add FOWNER \
+  --cap-add FSETID \
+  --cap-add SETUID \
+  --cap-add SETGID \
   -t hubcell.local/test-image:latest \
   --network project-network-demo \
   -m 4294967296 \

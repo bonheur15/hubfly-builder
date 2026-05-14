@@ -362,19 +362,24 @@ func TestAutoDetectBuildConfigJavaQuarkusMavenWrapperClearsMavenConfig(t *testin
 		t.Fatalf("expected quarkus fast-jar run command, got %q", cfg.RunCommand)
 	}
 	dockerfile := string(cfg.DockerfileContent)
+	if strings.Contains(dockerfile, "ENV MAVEN_CONFIG=") {
+		t.Fatalf("did not expect empty MAVEN_CONFIG because Maven image entrypoint treats it as a copy destination, got:\n%s", dockerfile)
+	}
 	for _, snippet := range []string{
-		"ENV MAVEN_CONFIG=",
 		"RUN chmod +x mvnw",
 		"RUN ./mvnw -DoutputFile=target/mvn-dependency-list.log -B -DskipTests clean dependency:list install -Pproduction",
 		"cp -R \"$dir\" /app/quarkus-app",
 		"for jar in target/*-runner.jar build/*-runner.jar",
 		"cp \"$jar\" /app/quarkus-app/quarkus-run.jar",
 		"COPY --from=builder /app/ /app/",
-		"CMD exec java -jar quarkus-app/quarkus-run.jar",
+		`CMD ["java", "-jar", "quarkus-app/quarkus-run.jar"]`,
 	} {
 		if !strings.Contains(dockerfile, snippet) {
 			t.Fatalf("expected Dockerfile to contain %q, got:\n%s", snippet, dockerfile)
 		}
+	}
+	if strings.Contains(dockerfile, "CMD exec java") {
+		t.Fatalf("did not expect shell-form Java CMD because Hubcell treats it as a single argv item, got:\n%s", dockerfile)
 	}
 	if strings.Contains(dockerfile, "cp \"$jar\" /app/app.jar") {
 		t.Fatalf("did not expect Quarkus fast-jar to be copied away from its lib directory, got:\n%s", dockerfile)
@@ -950,6 +955,12 @@ tokio = { version = "1", features = ["full"] }
 	}
 	if !strings.Contains(dockerfile, `target/release/hello-world`) {
 		t.Fatalf("expected Dockerfile to copy named rust binary, got:\n%s", dockerfile)
+	}
+	if !strings.Contains(dockerfile, `for candidate in "target/release/hello-world" "target/release/hello_world"; do`) {
+		t.Fatalf("expected Dockerfile to use lowercase shell for loop, got:\n%s", dockerfile)
+	}
+	if strings.Contains(dockerfile, `For candidate`) {
+		t.Fatalf("expected Dockerfile not to use invalid uppercase shell For loop, got:\n%s", dockerfile)
 	}
 	if !strings.Contains(dockerfile, "FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef") {
 		t.Fatalf("expected cargo-chef base stage, got:\n%s", dockerfile)
@@ -1867,7 +1878,7 @@ func main() {
 	if !strings.Contains(dockerfile, "RUN go build -o app .") {
 		t.Fatalf("expected go build step, got:\n%s", dockerfile)
 	}
-	if !strings.Contains(dockerfile, "CMD exec ./app") {
+	if !strings.Contains(dockerfile, `CMD ["./app"]`) {
 		t.Fatalf("expected app command, got:\n%s", dockerfile)
 	}
 }
@@ -2487,5 +2498,35 @@ func TestFinalizeBuildConfigWithOptionsForcesStaticFrontendRuntime(t *testing.T)
 	}
 	if strings.Contains(dockerfile, "npm run preview") {
 		t.Fatalf("did not expect preview command in static Dockerfile:\n%s", dockerfile)
+	}
+}
+
+func TestGenerateDockerfileBunRunCommandUsesExecFormCMD(t *testing.T) {
+	content, err := GenerateDockerfile("bun", "1.2", "bun install", "bun run build", "bun run start")
+	if err != nil {
+		t.Fatalf("GenerateDockerfile returned error: %v", err)
+	}
+
+	dockerfile := string(content)
+	if !strings.Contains(dockerfile, `CMD ["bun", "run", "start"]`) {
+		t.Fatalf("expected Bun run command to use exec-form CMD, got:\n%s", dockerfile)
+	}
+	if strings.Contains(dockerfile, "CMD exec bun run start") {
+		t.Fatalf("did not expect shell-form Bun CMD, got:\n%s", dockerfile)
+	}
+}
+
+func TestGenerateDockerfileShellRunCommandUsesJSONShellCMD(t *testing.T) {
+	content, err := GenerateDockerfile("python", "3.12", "pip install -r requirements.txt", "", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}")
+	if err != nil {
+		t.Fatalf("GenerateDockerfile returned error: %v", err)
+	}
+
+	dockerfile := string(content)
+	if !strings.Contains(dockerfile, `CMD ["/bin/sh", "-c", "exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]`) {
+		t.Fatalf("expected shell command to use JSON shell-form CMD, got:\n%s", dockerfile)
+	}
+	if strings.Contains(dockerfile, "CMD exec ") {
+		t.Fatalf("did not expect raw shell-form CMD exec, got:\n%s", dockerfile)
 	}
 }
