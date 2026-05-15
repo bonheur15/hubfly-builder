@@ -436,6 +436,43 @@ This command prints only the version string.
 
 ---
 
+## Development & Deployment Make Commands
+
+A `Makefile` is included to streamline local development, testing, and deployments to your test server.
+
+### Local Development Commands
+
+- `make build`: Compiles the binary locally for your current OS and architecture.
+- `make build-linux`: Cross-compiles the binary specifically for Linux AMD64 (`hubfly-builder-linux`).
+- `make test`: Runs all unit tests.
+- `make vet`: Runs `go vet` to analyze the code for potential errors.
+- `make lint`: Runs `golangci-lint` (requires golangci-lint to be installed).
+- `make sec-scan`: Scans the codebase for vulnerabilities using `govulncheck`.
+- `make clean`: Removes the compiled binaries from the local directory.
+
+### Deployment Commands
+
+The `Makefile` makes it extremely easy to push your local uncommitted changes directly to a remote test server (defaulting to `root@test1-hubfly-node`).
+
+> **Note**: These commands assume you have SSH access to `root@test1-hubfly-node`. You can edit the `TEST_SERVER` variable in the `Makefile` if your test server differs.
+
+#### `make deploy-full` (First-Time Install / Config Updates)
+Use this command **the first time** you are installing the builder on the test server, or if you modify the systemd service or sudoers configurations.
+- Compiles the Linux binary locally.
+- Safely waits for active builds to finish, then stops the service.
+- Creates the `hubfly-builder` system user and all necessary directories with correct permissions.
+- Uploads and registers the `hubfly-builder.service` and `sudoers` configurations.
+- Uploads the binary, reloads the systemd daemon, enables, and starts the service.
+
+#### `make deploy` (Routine Code Updates)
+Use this command for **all subsequent deployments** when you only need to push a new compiled binary.
+- Cross-compiles the Linux binary locally.
+- Checks the remote server for the active lockfile (`/run/hubfly-builder-update.lock`). If a build is running, it will automatically pause and wait for it to finish, ensuring no jobs are interrupted.
+- Once safe, it stops the service, updates the binary, and restarts it.
+- **Safety**: If it detects the systemd service has not been installed yet, it will warn you to run `make deploy-full` instead.
+
+---
+
 ## Utility Commands
 
 ### Manual Build Test
