@@ -32,12 +32,12 @@ REPO_URL="https://github.com/hubfly-space/hubfly-builder.git"
 # 3. Prerequisites
 check_dependencies() {
     echo -e "${YELLOW}Checking dependencies...${NC}"
-    DEPS=("git" "go" "sqlite3" "buildctl")
+    DEPS=("git" "go" "sqlite3" "hubcell")
     for dep in "${DEPS[@]}"; do
         if ! command -v "$dep" &> /dev/null; then
             echo -e "${RED}Error: $dep is not installed.${NC}"
-            if [[ "$dep" == "buildctl" ]]; then
-                echo -e "Please install BuildKit (moby/buildkit)."
+            if [[ "$dep" == "hubcell" ]]; then
+                echo -e "Please install Hubcell CLI."
             elif [[ "$dep" == "go" ]]; then
                 echo -e "Please install Go (1.21+)."
             fi
