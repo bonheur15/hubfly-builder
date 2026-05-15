@@ -34,6 +34,7 @@ const (
 	defaultGlobalLogDir     = "/var/log/hubfly-builder"
 	defaultConcurrentBuilds = 3
 	defaultLogRetentionDays = 7
+	defaultUpdateLockfile   = "/run/hubfly-builder-update.lock"
 )
 
 var version = "dev"
@@ -48,6 +49,7 @@ type EnvConfig struct {
 	LogDir              string `json:"LOG_DIR"`
 	MaxConcurrentBuilds int    `json:"MAX_CONCURRENT_BUILDS"`
 	LogRetentionDays    int    `json:"LOG_RETENTION_DAYS"`
+	UpdateLockfile      string `json:"UPDATE_LOCKFILE"`
 }
 
 func defaultEnvConfig() EnvConfig {
@@ -61,6 +63,7 @@ func defaultEnvConfig() EnvConfig {
 		LogDir:              defaultLogDir,
 		MaxConcurrentBuilds: defaultConcurrentBuilds,
 		LogRetentionDays:    defaultLogRetentionDays,
+		UpdateLockfile:      "./hubfly-builder-update.lock",
 	}
 }
 
@@ -68,6 +71,7 @@ func defaultGlobalEnvConfig() EnvConfig {
 	config := defaultEnvConfig()
 	config.DataDir = defaultGlobalDataDir
 	config.LogDir = defaultGlobalLogDir
+	config.UpdateLockfile = defaultUpdateLockfile
 	return config
 }
 
@@ -167,6 +171,9 @@ func mergeEnvConfig(dst *EnvConfig, src EnvConfig) {
 	if src.LogRetentionDays > 0 {
 		dst.LogRetentionDays = src.LogRetentionDays
 	}
+	if src.UpdateLockfile != "" {
+		dst.UpdateLockfile = src.UpdateLockfile
+	}
 }
 
 func applyEnvironmentOverrides(config *EnvConfig) {
@@ -204,6 +211,9 @@ func applyEnvironmentOverrides(config *EnvConfig) {
 		} else {
 			log.Printf("WARN: ignoring invalid LOG_RETENTION_DAYS=%q", value)
 		}
+	}
+	if value := os.Getenv("UPDATE_LOCKFILE"); value != "" {
+		config.UpdateLockfile = value
 	}
 }
 
@@ -271,6 +281,7 @@ func main() {
 		config.LogDir,
 		config.MaxConcurrentBuilds,
 		config.LogRetentionDays,
+		config.UpdateLockfile,
 	)
 	log.Printf("Effective: CALLBACK_URL=%q", callbackURL)
 
@@ -287,8 +298,7 @@ func main() {
 	}()
 
 	apiClient := api.NewClient(callbackURL)
-
-	manager := executor.NewManager(storage, logManager, allowedCommands, apiClient, config.MaxConcurrentBuilds)
+	manager := executor.NewManager(storage, logManager, allowedCommands, apiClient, config.MaxConcurrentBuilds, config.UpdateLockfile)
 	go manager.Start()
 
 	uploadServer := uploadserver.NewServer(callbackURL)

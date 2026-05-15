@@ -11,6 +11,7 @@ import (
 	"hubfly-builder/internal/api"
 	"hubfly-builder/internal/logs"
 	"hubfly-builder/internal/storage"
+	"os"
 )
 
 const maxRetries = 0
@@ -21,23 +22,27 @@ type Manager struct {
 	allowlist     *allowlist.AllowedCommands
 	apiClient     *api.Client
 	maxConcurrent int
+	lockfilePath  string
 	activeBuilds  map[string]bool
 	activeUsers   map[string]bool
 	mu            sync.Mutex
 	newJobSignal  chan struct{}
 }
 
-func NewManager(storage *storage.Storage, logManager *logs.LogManager, allowlist *allowlist.AllowedCommands, apiClient *api.Client, maxConcurrent int) *Manager {
-	return &Manager{
+func NewManager(storage *storage.Storage, logManager *logs.LogManager, allowlist *allowlist.AllowedCommands, apiClient *api.Client, maxConcurrent int, lockfilePath string) *Manager {
+	m := &Manager{
 		storage:       storage,
 		logManager:    logManager,
 		allowlist:     allowlist,
 		apiClient:     apiClient,
 		maxConcurrent: maxConcurrent,
+		lockfilePath:  lockfilePath,
 		activeBuilds:  make(map[string]bool),
 		activeUsers:   make(map[string]bool),
 		newJobSignal:  make(chan struct{}, 1),
 	}
+	m.updateLockfile()
+	return m
 }
 
 func (m *Manager) SignalNewJob() {
@@ -87,6 +92,7 @@ func (m *Manager) tryToDispatchJob() {
 	m.mu.Lock()
 	m.activeBuilds[job.ID] = true
 	m.activeUsers[job.UserID] = true
+	m.updateLockfileLocked()
 	m.mu.Unlock()
 
 	if err := m.storage.UpdateJobStatus(job.ID, "claimed"); err != nil {
@@ -94,6 +100,7 @@ func (m *Manager) tryToDispatchJob() {
 		m.mu.Lock()
 		delete(m.activeBuilds, job.ID)
 		delete(m.activeUsers, job.UserID)
+		m.updateLockfileLocked()
 		m.mu.Unlock()
 		return
 	}
@@ -104,6 +111,7 @@ func (m *Manager) tryToDispatchJob() {
 			m.mu.Lock()
 			delete(m.activeBuilds, job.ID)
 			delete(m.activeUsers, job.UserID)
+			m.updateLockfileLocked()
 			m.mu.Unlock()
 		}()
 
@@ -175,5 +183,21 @@ func (m *Manager) GetActiveBuilds() []string {
 	}
 
 	return ids
+}
 
+func (m *Manager) updateLockfileLocked() {
+	if m.lockfilePath == "" {
+		return
+	}
+	if len(m.activeBuilds) > 0 {
+		_ = os.WriteFile(m.lockfilePath, []byte("busy"), 0644)
+	} else {
+		_ = os.Remove(m.lockfilePath)
+	}
+}
+
+func (m *Manager) updateLockfile() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.updateLockfileLocked()
 }
