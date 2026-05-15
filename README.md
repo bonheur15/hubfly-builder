@@ -14,6 +14,7 @@
 - **Hubcell Local Images:** Generated image tags use the `hubcell.local` registry expected by Hubcell builds.
 - **Resource Management:** Supports configurable per-job resource limits (CPU/Memory).
 - **Cleanup Automation:** Automatically prunes build workspaces and implements log retention policies.
+- **Security Scanning:** Integrated automated security workflows using Govulncheck and Trivy to monitor for vulnerabilities in Go dependencies and the codebase.
 
 ---
 
