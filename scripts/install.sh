@@ -92,6 +92,14 @@ build_and_install() {
     # Install service file
     echo -e "${YELLOW}Installing systemd service...${NC}"
     cp packaging/systemd/hubfly-builder.service /etc/systemd/system/
+    
+    # Install sudoers file
+    echo -e "${YELLOW}Installing sudoers file...${NC}"
+    mkdir -p /etc/sudoers.d
+    cp packaging/sudoers/hubfly-builder /etc/sudoers.d/hubfly-builder
+    chmod 440 /etc/sudoers.d/hubfly-builder
+    visudo -cf /etc/sudoers.d/hubfly-builder || (echo -e "${RED}Error: sudoers file validation failed${NC}" && exit 1)
+
     systemctl daemon-reload
 }
 
