@@ -44,13 +44,24 @@ deploy: build-linux
 	@echo "==> Uploading new binary..."
 	@scp $(BINARY_NAME)-linux $(TEST_SERVER):/usr/local/bin/$(BINARY_NAME)
 	@echo "==> Starting service..."
-	@ssh $(TEST_SERVER) 'chmod +x /usr/local/bin/$(BINARY_NAME) && systemctl start $(BINARY_NAME)'
+	@ssh $(TEST_SERVER) 'chmod +x /usr/local/bin/$(BINARY_NAME) && \
+		if systemctl list-unit-files | grep -q $(BINARY_NAME).service; then \
+			systemctl start $(BINARY_NAME); \
+		else \
+			echo "    WARNING: Service unit not found. This is expected if it is a first-time install."; \
+		fi'
 	@rm -f $(BINARY_NAME)-linux
 	@echo "==> Deployment complete!"
 
 deploy-full: deploy
+	@echo "==> Creating user and directories..."
+	@ssh $(TEST_SERVER) ' \
+		id -u hubfly-builder &>/dev/null || useradd --system --shell /usr/sbin/nologin --home-dir /var/lib/hubfly-builder hubfly-builder; \
+		mkdir -p /etc/hubfly-builder /var/lib/hubfly-builder /var/log/hubfly-builder /etc/sudoers.d; \
+		chown -R hubfly-builder:hubfly-builder /etc/hubfly-builder /var/lib/hubfly-builder /var/log/hubfly-builder \
+	'
 	@echo "==> Updating systemd and sudoers..."
 	@scp packaging/systemd/hubfly-builder.service $(TEST_SERVER):/etc/systemd/system/
 	@scp packaging/sudoers/hubfly-builder $(TEST_SERVER):/etc/sudoers.d/
-	@ssh $(TEST_SERVER) 'chmod 440 /etc/sudoers.d/hubfly-builder && systemctl daemon-reload && systemctl restart $(BINARY_NAME)'
+	@ssh $(TEST_SERVER) 'chmod 440 /etc/sudoers.d/hubfly-builder && systemctl daemon-reload && systemctl enable --now $(BINARY_NAME) && systemctl restart $(BINARY_NAME)'
 	@echo "==> Full deployment complete!"

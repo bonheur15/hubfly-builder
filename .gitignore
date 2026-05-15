@@ -2,3 +2,5 @@ log/
 hubfly-builder.sqlite
 /hubfly-builder
 configs/env.json
+hubfly-builder-linux
+hubfly-builder-linux.zip
