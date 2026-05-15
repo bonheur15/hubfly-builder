@@ -36,6 +36,7 @@ For local development, if the global config cannot be created and `HUBFLY_BUILDE
 | `LOG_DIR` | System and job log directory | `/var/log/hubfly-builder` under systemd |
 | `MAX_CONCURRENT_BUILDS` | Concurrent build worker limit | `3` |
 | `LOG_RETENTION_DAYS` | Job log retention window | `7` |
+| `UPDATE_LOCKFILE` | Lockfile path to signal active builds | `/run/hubfly-builder-update.lock` |
 
 Example `/etc/hubfly-builder/config.json`:
 
@@ -49,7 +50,8 @@ Example `/etc/hubfly-builder/config.json`:
   "DATA_DIR": "/var/lib/hubfly-builder",
   "LOG_DIR": "/var/log/hubfly-builder",
   "MAX_CONCURRENT_BUILDS": 3,
-  "LOG_RETENTION_DAYS": 7
+  "LOG_RETENTION_DAYS": 7,
+  "UPDATE_LOCKFILE": "/run/hubfly-builder-update.lock"
 }
 ```
 
@@ -326,6 +328,18 @@ The builder process must be able to:
 - run the Hubcell CLI through `sudo`
 - clone Git repositories over the network
 - write to its configured `DATA_DIR` and `LOG_DIR`
+
+### One-Line Installation (Linux)
+
+You can install or update Hubfly Builder with a single command. This script handles dependency checks, user creation, directory setup, building from source, and systemd service installation.
+
+```bash
+curl -sSL https://raw.githubusercontent.com/hubfly-space/hubfly-builder/main/scripts/install.sh | sudo bash
+```
+
+### Safe Updates
+
+Hubfly Builder supports safe updates. When the installation script is run, it checks for an active lockfile (`/run/hubfly-builder-update.lock`). If builds are currently running, the installer will wait for them to complete before stopping the service and replacing the binary. This ensures that no builds are interrupted during an update.
 
 ### Systemd Install
 
