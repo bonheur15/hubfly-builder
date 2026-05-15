@@ -19,25 +19,41 @@
 
 ## Configuration
 
-### Environment Variables & Optional `configs/env.json`
+### Global Configuration
 
-The builder can be configured via environment variables or an optional JSON override file at `configs/env.json`. If the file is missing, the builder uses built-in defaults and does not generate the file.
+The production service reads a global JSON config from `/etc/hubfly-builder/config.json`. If the file is missing on startup, the builder creates it with production defaults. Set `HUBFLY_BUILDER_CONFIG` to use a different config path.
+
+For local development, if the global config cannot be created and `HUBFLY_BUILDER_CONFIG` is not set, the builder falls back to `configs/env.json`.
 
 | Key | Description | Default / Example |
 | :--- | :--- | :--- |
 | `HUBCELL_BASE_URL` | Hubcell API base URL used by ancillary Hubcell integrations | `http://127.0.0.1:10012` |
-| `HUBCELL_CLI_PATH` | Hubcell executable path, or a directory containing `hubcell` | `/home/destroyer/Desktop/hubfly-cloud/hubcell/hubcell` |
+| `HUBCELL_CLI_PATH` | Hubcell executable path, or a directory containing `hubcell` | `/usr/local/bin/hubcell` |
 | `CALLBACK_URL` | Backend webhook for reporting results | `https://hubfly.space/api/builds/callback` |
+| `SERVER_ADDR` | Build API listen address | `:10008` |
+| `UPLOAD_ADDR` | Image upload API listen address | `:10011` |
+| `DATA_DIR` | SQLite state directory | `/var/lib/hubfly-builder` under systemd |
+| `LOG_DIR` | System and job log directory | `/var/log/hubfly-builder` under systemd |
+| `MAX_CONCURRENT_BUILDS` | Concurrent build worker limit | `3` |
+| `LOG_RETENTION_DAYS` | Job log retention window | `7` |
 
-Example optional `configs/env.json`:
+Example `/etc/hubfly-builder/config.json`:
 
 ```json
 {
   "HUBCELL_BASE_URL": "http://127.0.0.1:10012",
-  "HUBCELL_CLI_PATH": "/home/destroyer/Desktop/hubfly-cloud/hubcell",
-  "CALLBACK_URL": "https://hubfly.space/api/builds/callback"
+  "HUBCELL_CLI_PATH": "/usr/local/bin/hubcell",
+  "CALLBACK_URL": "https://hubfly.space/api/builds/callback",
+  "SERVER_ADDR": ":10008",
+  "UPLOAD_ADDR": ":10011",
+  "DATA_DIR": "/var/lib/hubfly-builder",
+  "LOG_DIR": "/var/log/hubfly-builder",
+  "MAX_CONCURRENT_BUILDS": 3,
+  "LOG_RETENTION_DAYS": 7
 }
 ```
+
+Environment variables with the same names override file values.
 
 ### Hubcell Build Configuration
 
@@ -51,11 +67,13 @@ At runtime the builder creates and uses these local paths:
 
 | Path | Purpose |
 | :--- | :--- |
-| `./data/hubfly-builder.sqlite` | SQLite database for jobs and state |
-| `./log/` | System log and per-job build logs |
-| `./configs/env.json` | Optional local config overrides |
+| `/etc/hubfly-builder/config.json` | Global service config |
+| `/var/lib/hubfly-builder/hubfly-builder.sqlite` | SQLite database for jobs and state under systemd |
+| `/var/log/hubfly-builder/` | System log and per-job build logs under systemd |
+| `./configs/env.json` | Local development fallback config |
+| `./data/`, `./log/` | Local development state and logs |
 
-Make sure the process user can create and write these paths.
+The packaged systemd unit creates `/etc/hubfly-builder`, `/var/lib/hubfly-builder`, and `/var/log/hubfly-builder` with ownership assigned to the `hubfly-builder` user.
 
 ---
 
@@ -307,7 +325,34 @@ The builder process must be able to:
 - talk to the Hubcell API
 - run the Hubcell CLI through `sudo`
 - clone Git repositories over the network
-- write to `./data` and `./log`
+- write to its configured `DATA_DIR` and `LOG_DIR`
+
+### Systemd Install
+
+Create a dedicated service user and install the binary:
+
+```bash
+sudo useradd --system --home /var/lib/hubfly-builder --shell /usr/sbin/nologin hubfly-builder
+sudo install -m 755 hubfly-builder /usr/local/bin/hubfly-builder
+sudo install -m 644 packaging/systemd/hubfly-builder.service /etc/systemd/system/hubfly-builder.service
+sudo install -m 440 packaging/sudoers/hubfly-builder /etc/sudoers.d/hubfly-builder
+sudo visudo -cf /etc/sudoers.d/hubfly-builder
+sudo systemctl daemon-reload
+sudo systemctl enable --now hubfly-builder
+```
+
+The unit runs as `hubfly-builder:hubfly-builder`, uses `/etc/hubfly-builder/config.json`, and stores state/logs in `/var/lib/hubfly-builder` and `/var/log/hubfly-builder`.
+
+If your Hubcell binary is not `/usr/local/bin/hubcell`, update both:
+
+- `/etc/hubfly-builder/config.json`
+- `/etc/sudoers.d/hubfly-builder`
+
+Then restart:
+
+```bash
+sudo systemctl restart hubfly-builder
+```
 
 ### Builder Runtime Notes
 
@@ -348,7 +393,7 @@ Each release asset also has a matching `.sha256` checksum file. Extracting a bun
 ```
 
 The server will start on port `10008` by default.
-Run it from the project root or the extracted release bundle root so the relative `./configs`, `./data`, and `./log` paths resolve correctly.
+For local runs, use `configs/env.json` or environment variables when `/etc/hubfly-builder/config.json` is not available.
 
 ### Development Run
 
@@ -372,7 +417,7 @@ This command prints only the version string.
 - ensure `HUBCELL_CLI_PATH` points to the Hubcell CLI or its containing directory
 - ensure the builder user can run the Hubcell CLI through `sudo`
 - ensure `CALLBACK_URL` is reachable from the builder host
-- ensure the process user can write `./data` and `./log`
+- ensure the process user can write `DATA_DIR` and `LOG_DIR`
 
 ---
 
