@@ -36,6 +36,8 @@ const (
 	bandwidthAPIBaseURL         = "http://localhost:10006"
 	defaultHubcellCPUPeriod     = int64(100000)
 	defaultHubcellRootfsInitial = "10g"
+	defaultHubcellCPU           = 2.0
+	defaultHubcellMemoryMB      = 4096
 )
 
 type Worker struct {
@@ -255,14 +257,9 @@ func (w *Worker) Run() error {
 		}
 	}
 
-	limits := w.job.BuildConfig.ResourceLimits
-	cpuLimit := limits.CPU
-	memLimit := limits.MemoryMB
-	if cpuLimit <= 0 {
-		cpuLimit = 2
-	}
-	if memLimit <= 0 {
-		memLimit = 4096
+	cpuLimit, memLimit := defaultHubcellResourceLimits()
+	if w.job.BuildConfig.ResourceLimits.CPU > 0 || w.job.BuildConfig.ResourceLimits.MemoryMB > 0 {
+		w.log("WARNING: buildConfig.resourceLimits is currently ignored; using default Hubcell limits cpu=%.1f memoryMB=%d", cpuLimit, memLimit)
 	}
 	if len(envResult.BuildSecrets) > 0 {
 		w.log("WARNING: build-time secrets were resolved, but hubcell build CLI does not accept secret mounts; secret values will not be passed to the build")
@@ -592,6 +589,10 @@ func cpuToQuota(cpu float64, period int64) int64 {
 		return 0
 	}
 	return int64(cpu*float64(period) + 0.5)
+}
+
+func defaultHubcellResourceLimits() (float64, int) {
+	return defaultHubcellCPU, defaultHubcellMemoryMB
 }
 
 func (w *Worker) applyNetworkBandwidth(networkName string, egressMbps, ingressMbps int) {

@@ -106,3 +106,13 @@ func TestHubcellBuildPathUsesDirectoryForNestedDockerfile(t *testing.T) {
 		t.Fatalf("expected nested Dockerfile directory, got %q", got)
 	}
 }
+
+func TestDefaultHubcellResourceLimits(t *testing.T) {
+	cpu, memoryMB := defaultHubcellResourceLimits()
+	if cpu != 2 {
+		t.Fatalf("expected default cpu 2, got %v", cpu)
+	}
+	if memoryMB != 4096 {
+		t.Fatalf("expected default memory 4096MB, got %d", memoryMB)
+	}
+}

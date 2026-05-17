@@ -160,6 +160,8 @@ Creates a new build job and queues it for execution.
 }
 ```
 
+`buildConfig.resourceLimits` is currently accepted for request compatibility but ignored during Hubcell builds. The builder always uses fixed defaults of `cpu=2` and `memoryMB=4096`.
+
 `buildConfig.env` is always treated in `auto` mode:
 - Public-prefixed vars (e.g. `NEXT_PUBLIC_`, `VITE_`) are resolved as `both` (build + runtime).
 - Keys with build evidence (`Dockerfile ARG`/reference or known build config references) are resolved to `build`.
