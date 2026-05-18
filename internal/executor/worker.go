@@ -615,7 +615,8 @@ func resolvedBuildEnvEntries(result envplan.Result) []string {
 
 	entries := make([]string, 0, len(keys))
 	for _, key := range keys {
-		entries = append(entries, key+"="+values[key])
+		escapedValue := strings.ReplaceAll(values[key], `"`, `\"`)
+		entries = append(entries, key+`="`+escapedValue+`"`)
 	}
 	return entries
 }

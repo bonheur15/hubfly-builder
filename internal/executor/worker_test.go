@@ -130,8 +130,8 @@ func TestResolvedBuildEnvEntriesMergesArgsAndSecrets(t *testing.T) {
 	})
 
 	want := []string{
-		"APP_ENV=production",
-		"DATABASE_URL=postgres://db/app",
+		`APP_ENV="production"`,
+		`DATABASE_URL="postgres://db/app"`,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("expected env entries %v, got %v", want, got)
