@@ -23,6 +23,7 @@ type HubcellBuildOpts struct {
 	WorkDir           string
 	ContextPath       string
 	ImageTag          string
+	Envs              []string
 	Network           string
 	MemoryBytes       int64
 	CPUPeriod         int64
@@ -43,6 +44,14 @@ func HubcellBuildCommandContext(ctx context.Context, opts HubcellBuildOpts) *exe
 	}
 
 	args = append(args, "-t", opts.ImageTag)
+
+	for _, envEntry := range opts.Envs {
+		envEntry = strings.TrimSpace(envEntry)
+		if envEntry == "" {
+			continue
+		}
+		args = append(args, "-e", envEntry)
+	}
 
 	if network := strings.TrimSpace(opts.Network); network != "" {
 		args = append(args, "--network", network)

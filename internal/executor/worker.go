@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -261,9 +262,7 @@ func (w *Worker) Run() error {
 	if w.job.BuildConfig.ResourceLimits.CPU > 0 || w.job.BuildConfig.ResourceLimits.MemoryMB > 0 {
 		w.log("WARNING: buildConfig.resourceLimits is currently ignored; using default Hubcell limits cpu=%.1f memoryMB=%d", cpuLimit, memLimit)
 	}
-	if len(envResult.BuildSecrets) > 0 {
-		w.log("WARNING: build-time secrets were resolved, but hubcell build CLI does not accept secret mounts; secret values will not be passed to the build")
-	}
+	buildEnvEntries := resolvedBuildEnvEntries(envResult)
 
 	if hasExistingDockerfile {
 		if hasCustomDockerfile {
@@ -319,6 +318,7 @@ func (w *Worker) Run() error {
 			WorkDir:     w.workDir,
 			ContextPath: hubcellBuildPath(w.workDir, dockerfilePath),
 			ImageTag:    imageTag,
+			Envs:        buildEnvEntries,
 			Network:     requestedNetwork,
 			MemoryBytes: memoryMBToBytes(memLimit),
 			CPUPeriod:   defaultHubcellCPUPeriod,
@@ -415,6 +415,7 @@ func (w *Worker) Run() error {
 			WorkDir:     w.workDir,
 			ContextPath: hubcellBuildPath(w.workDir, dockerfilePath),
 			ImageTag:    imageTag,
+			Envs:        buildEnvEntries,
 			Network:     requestedNetwork,
 			MemoryBytes: memoryMBToBytes(memLimit),
 			CPUPeriod:   defaultHubcellCPUPeriod,
@@ -593,6 +594,30 @@ func cpuToQuota(cpu float64, period int64) int64 {
 
 func defaultHubcellResourceLimits() (float64, int) {
 	return defaultHubcellCPU, defaultHubcellMemoryMB
+}
+
+func resolvedBuildEnvEntries(result envplan.Result) []string {
+	keys := make([]string, 0, len(result.BuildArgs)+len(result.BuildSecrets))
+	values := make(map[string]string, len(result.BuildArgs)+len(result.BuildSecrets))
+
+	for key, value := range result.BuildArgs {
+		keys = append(keys, key)
+		values[key] = value
+	}
+	for key, value := range result.BuildSecrets {
+		if _, exists := values[key]; !exists {
+			keys = append(keys, key)
+		}
+		values[key] = value
+	}
+
+	sort.Strings(keys)
+
+	entries := make([]string, 0, len(keys))
+	for _, key := range keys {
+		entries = append(entries, key+"="+values[key])
+	}
+	return entries
 }
 
 func (w *Worker) applyNetworkBandwidth(networkName string, egressMbps, ingressMbps int) {

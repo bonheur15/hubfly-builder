@@ -3,9 +3,11 @@ package executor
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	"hubfly-builder/internal/envplan"
 	"hubfly-builder/internal/storage"
 )
 
@@ -114,5 +116,24 @@ func TestDefaultHubcellResourceLimits(t *testing.T) {
 	}
 	if memoryMB != 4096 {
 		t.Fatalf("expected default memory 4096MB, got %d", memoryMB)
+	}
+}
+
+func TestResolvedBuildEnvEntriesMergesArgsAndSecrets(t *testing.T) {
+	got := resolvedBuildEnvEntries(envplan.Result{
+		BuildArgs: map[string]string{
+			"APP_ENV": "production",
+		},
+		BuildSecrets: map[string]string{
+			"DATABASE_URL": "postgres://db/app",
+		},
+	})
+
+	want := []string{
+		"APP_ENV=production",
+		"DATABASE_URL=postgres://db/app",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("expected env entries %v, got %v", want, got)
 	}
 }
