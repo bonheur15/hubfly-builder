@@ -52,14 +52,13 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME}"
-          DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
           BIN_NAME="hubfly-builder"
           if [ "${{ matrix.goos }}" = "windows" ]; then
             BIN_NAME="hubfly-builder.exe"
           fi
 
-          mkdir -p build dist stage/configs
+          mkdir -p build dist stage
 
           GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
             go build \
@@ -70,7 +69,6 @@ jobs:
 
           cp "build/${BIN_NAME}" "stage/${BIN_NAME}"
           cp README.md stage/README.md
-          cp configs/buildkitd.toml stage/configs/buildkitd.toml
 
           ASSET_NAME="hubfly-builder_${{ matrix.goos }}_${{ matrix.goarch }}.${{ matrix.ext }}"
           export ASSET_NAME

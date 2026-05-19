@@ -402,7 +402,7 @@ The GitHub release publishes per-platform bundles:
 - `hubfly-builder_darwin_arm64.tar.gz`
 - `hubfly-builder_windows_amd64.zip`
 
-Each release asset also has a matching `.sha256` checksum file. Extracting a bundle places the `hubfly-builder` binary (or `hubfly-builder.exe` on Windows) at the archive root, alongside `README.md` and the `configs/` directory.
+Each release asset also has a matching `.sha256` checksum file. Extracting a bundle places the `hubfly-builder` binary (or `hubfly-builder.exe` on Windows) at the archive root, alongside `README.md`.
 
 ### Run The Server
 ```bash
