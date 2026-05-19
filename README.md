@@ -334,10 +334,16 @@ The builder process must be able to:
 
 ### One-Line Installation (Linux)
 
-You can install or update Hubfly Builder with a single command. This script handles dependency checks, user creation, directory setup, building from source, and systemd service installation.
+You can install or update Hubfly Builder with a single command. This script detects the Linux architecture, downloads the matching GitHub release bundle, verifies its checksum, installs the binary, and sets up the systemd service and sudoers entry. Go is not required on the target machine.
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/hubfly-space/hubfly-builder/main/scripts/install.sh | sudo bash
+```
+
+To install a specific release instead of the latest one:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/hubfly-space/hubfly-builder/main/scripts/install.sh | sudo INSTALL_VERSION=v1.8.3 bash
 ```
 
 ### Safe Updates
