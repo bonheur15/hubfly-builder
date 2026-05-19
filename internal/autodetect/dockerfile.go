@@ -1,6 +1,7 @@
 package autodetect
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -962,19 +963,7 @@ func renderRunLine(command string, secretBuildKeys []string) string {
 		return ""
 	}
 
-	if len(secretBuildKeys) == 0 {
-		return fmt.Sprintf("RUN %s\n", command)
-	}
-
-	mountFlags := make([]string, 0, len(secretBuildKeys))
-	exports := make([]string, 0, len(secretBuildKeys))
-	for _, key := range secretBuildKeys {
-		mountFlags = append(mountFlags, fmt.Sprintf("--mount=type=secret,id=%s", key))
-		exports = append(exports, fmt.Sprintf("export %s=\"$(cat /run/secrets/%s)\";", key, key))
-	}
-
-	payload := "set -e; " + strings.Join(exports, " ") + " " + command
-	return fmt.Sprintf("RUN %s sh -c '%s'\n", strings.Join(mountFlags, " "), escapeSingleQuotes(payload))
+	return fmt.Sprintf("RUN %s\n", command)
 }
 
 type cacheMount struct {
@@ -988,121 +977,14 @@ func renderRunLineWithCaches(command string, caches []cacheMount, secretBuildKey
 		return ""
 	}
 
-	mountFlags := make([]string, 0, len(secretBuildKeys)+len(caches))
-	for _, cache := range caches {
-		target := strings.TrimSpace(cache.Target)
-		if target == "" {
-			continue
-		}
-		flag := fmt.Sprintf("--mount=type=cache,target=%s", target)
-		if id := strings.TrimSpace(cache.ID); id != "" {
-			flag += ",id=" + id
-		}
-		mountFlags = append(mountFlags, flag)
-	}
-
-	if len(secretBuildKeys) == 0 {
-		if len(mountFlags) == 0 {
-			return fmt.Sprintf("RUN %s\n", command)
-		}
-		return fmt.Sprintf("RUN %s %s\n", strings.Join(mountFlags, " "), command)
-	}
-
-	exports := make([]string, 0, len(secretBuildKeys))
-	for _, key := range secretBuildKeys {
-		mountFlags = append(mountFlags, fmt.Sprintf("--mount=type=secret,id=%s", key))
-		exports = append(exports, fmt.Sprintf("export %s=\"$(cat /run/secrets/%s)\";", key, key))
-	}
-
-	payload := "set -e; " + strings.Join(exports, " ") + " " + command
-	return fmt.Sprintf("RUN %s sh -c '%s'\n", strings.Join(mountFlags, " "), escapeSingleQuotes(payload))
+	return fmt.Sprintf("RUN %s\n", command)
 }
 
 func buildCacheMounts(plan buildPlan) []cacheMount {
-	if strings.TrimSpace(plan.BuildCommand) == "" {
-		return nil
-	}
-
-	if strings.TrimSpace(plan.Runtime) == "java" {
-		command := strings.ToLower(strings.TrimSpace(plan.BuildCommand))
-		if strings.Contains(command, "mvn") || strings.Contains(command, "./mvnw") {
-			return []cacheMount{
-				cacheMountForTarget("/root/.m2", cacheIDSuffix("maven-repo")),
-			}
-		}
-	}
-
-	framework := strings.ToLower(strings.TrimSpace(plan.Framework))
-	switch framework {
-	case "next":
-		return []cacheMount{
-			cacheMountFor(plan, ".next/cache", cacheIDSuffix(framework, "next-cache")),
-		}
-	case "nuxt":
-		return []cacheMount{
-			cacheMountFor(plan, ".nuxt", cacheIDSuffix(framework, "nuxt")),
-			cacheMountFor(plan, "node_modules/.cache/nuxt", cacheIDSuffix(framework, "node-cache")),
-		}
-	case "vite":
-		return []cacheMount{
-			cacheMountFor(plan, "node_modules/.vite", cacheIDSuffix(framework, "vite")),
-			cacheMountFor(plan, "node_modules/.cache/vite", cacheIDSuffix(framework, "node-cache")),
-		}
-	case "astro":
-		return []cacheMount{
-			cacheMountFor(plan, "node_modules/.astro", cacheIDSuffix(framework, "astro")),
-			cacheMountFor(plan, "node_modules/.cache/astro", cacheIDSuffix(framework, "node-cache")),
-		}
-	case "angular":
-		return []cacheMount{
-			cacheMountFor(plan, ".angular/cache", cacheIDSuffix(framework, "angular-cache")),
-		}
-	case "cra":
-		return []cacheMount{
-			cacheMountFor(plan, "node_modules/.cache", cacheIDSuffix(framework, "node-cache")),
-		}
-	case "sveltekit":
-		return []cacheMount{
-			cacheMountFor(plan, ".svelte-kit", cacheIDSuffix(framework, "svelte-kit")),
-			cacheMountFor(plan, "node_modules/.vite", cacheIDSuffix(framework, "vite")),
-		}
-	case "remix":
-		return []cacheMount{
-			cacheMountFor(plan, "node_modules/.cache/remix", cacheIDSuffix(framework, "remix-cache")),
-		}
-	default:
-		return nil
-	}
+	return nil
 }
 
 func installCacheMounts(plan buildPlan) []cacheMount {
-	command := strings.ToLower(strings.TrimSpace(plan.InstallCommand))
-	if command == "" {
-		return nil
-	}
-
-	if strings.HasPrefix(command, "bun ") || strings.TrimSpace(plan.Runtime) == "bun" {
-		return []cacheMount{
-			cacheMountForTarget("/root/.bun/install/cache", cacheIDSuffix("bun-cache")),
-		}
-	}
-	if strings.HasPrefix(command, "npm ") {
-		return []cacheMount{
-			cacheMountForTarget("/root/.npm", cacheIDSuffix("npm-cache")),
-		}
-	}
-	if strings.HasPrefix(command, "pnpm ") {
-		return []cacheMount{
-			cacheMountForTarget("/root/.local/share/pnpm/store/v3", cacheIDSuffix("pnpm-store-v3")),
-			cacheMountForTarget("/root/.pnpm-store", cacheIDSuffix("pnpm-store")),
-		}
-	}
-	if strings.HasPrefix(command, "yarn ") {
-		return []cacheMount{
-			cacheMountForTarget("/root/.cache/yarn", cacheIDSuffix("yarn-cache")),
-			cacheMountForTarget("/usr/local/share/.cache/yarn", cacheIDSuffix("yarn-cache-global")),
-		}
-	}
 	return nil
 }
 
@@ -1190,13 +1072,68 @@ func renderCmdLine(command, initCommand string) string {
 		parts = append(parts, initCommand)
 	}
 	if command != "" {
-		if useExecForCommand(command) {
-			parts = append(parts, "exec "+command)
-		} else {
-			parts = append(parts, command)
+		parts = append(parts, shellCommandPart(command))
+	}
+
+	if initCommand == "" {
+		if args := directCmdArgs(command); len(args) > 0 {
+			return renderJSONCmdLine(args)
 		}
 	}
-	return fmt.Sprintf("CMD %s\n", strings.Join(parts, "; "))
+
+	return renderJSONCmdLine([]string{"/bin/sh", "-c", strings.Join(parts, "; ")})
+}
+
+func shellCommandPart(command string) string {
+	if useExecForCommand(command) {
+		return "exec " + command
+	}
+	return command
+}
+
+func renderJSONCmdLine(args []string) string {
+	quoted := make([]string, 0, len(args))
+	for _, part := range args {
+		payload, err := json.Marshal(part)
+		if err != nil {
+			return ""
+		}
+		quoted = append(quoted, string(payload))
+	}
+	return fmt.Sprintf("CMD [%s]\n", strings.Join(quoted, ", "))
+}
+
+func directCmdArgs(command string) []string {
+	command = strings.TrimSpace(command)
+	if command == "" || commandNeedsShell(command) {
+		return nil
+	}
+
+	parts := strings.Fields(command)
+	if len(parts) == 0 || hasEnvAssignmentPrefix(parts) {
+		return nil
+	}
+	return parts
+}
+
+func commandNeedsShell(command string) bool {
+	return strings.ContainsAny(command, "&;|<>$`'\"\\(){}[]*?!~") || strings.HasPrefix(command, "cd ")
+}
+
+func hasEnvAssignmentPrefix(parts []string) bool {
+	if len(parts) == 0 || !strings.Contains(parts[0], "=") {
+		return false
+	}
+	name := strings.SplitN(parts[0], "=", 2)[0]
+	if name == "" {
+		return false
+	}
+	for _, r := range name {
+		if (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 func renderEntrypointLine(command string) string {
@@ -1244,24 +1181,7 @@ func renderEnvLines(values map[string]string) string {
 }
 
 func renderBuilderEnvLines(plan buildPlan) string {
-	values := map[string]string{}
-	if shouldClearMavenConfig(plan) {
-		values["MAVEN_CONFIG"] = ""
-	}
-	return renderEnvLines(values)
-}
-
-func shouldClearMavenConfig(plan buildPlan) bool {
-	if strings.TrimSpace(plan.Runtime) != "java" {
-		return false
-	}
-	combined := strings.Join([]string{
-		plan.InstallCommand,
-		strings.Join(plan.SetupCommands, " "),
-		plan.BuildCommand,
-		strings.Join(plan.PostBuildCommands, " "),
-	}, " ")
-	return strings.Contains(combined, "./mvnw")
+	return ""
 }
 
 func renderAptInstallLine(packages []string) string {

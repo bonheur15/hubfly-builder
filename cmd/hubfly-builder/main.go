@@ -7,12 +7,11 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
+	"strconv"
 	"time"
 
 	"hubfly-builder/internal/allowlist"
 	"hubfly-builder/internal/api"
-	"hubfly-builder/internal/driver"
 	"hubfly-builder/internal/executor"
 	"hubfly-builder/internal/logs"
 	"hubfly-builder/internal/offline"
@@ -21,176 +20,207 @@ import (
 	"hubfly-builder/internal/uploadserver"
 )
 
-const maxConcurrentBuilds = 3
-const logRetentionDays = 7
-
 const (
-	defaultBuildKitAddr = "docker-container://buildkitd"
-	defaultBuildKitHost = "docker-container://buildkitd"
-	defaultCallbackURL  = "https://hubfly.space/api/builds/callback"
-	defaultRegistryURL  = "127.0.0.1:10009"
-	defaultCacheBackend = "local"
-	defaultCacheDir     = "data/buildkit-cache"
-	defaultServerAddr   = ":10008"
-	defaultUploadAddr   = ":10011"
+	defaultGlobalConfigPath = "/etc/hubfly-builder/config.json"
+	localConfigPath         = "configs/env.json"
+	defaultHubcellBaseURL   = "http://127.0.0.1:10012"
+	defaultHubcellCLIPath   = "/usr/local/bin/hubcell"
+	defaultCallbackURL      = "https://hubfly.space/api/builds/callback"
+	defaultServerAddr       = ":10008"
+	defaultUploadAddr       = ":10011"
+	defaultDataDir          = "./data"
+	defaultLogDir           = "./log"
+	defaultGlobalDataDir    = "/var/lib/hubfly-builder"
+	defaultGlobalLogDir     = "/var/log/hubfly-builder"
+	defaultConcurrentBuilds = 3
+	defaultLogRetentionDays = 7
+	defaultUpdateLockfile   = "/run/hubfly-builder-update.lock"
 )
 
 var version = "dev"
 
-const (
-	projectCacheRetentionDays = 30
-	sharedCacheRetentionDays  = 15
-)
-
 type EnvConfig struct {
-	BuildKitAddr string `json:"BUILDKIT_ADDR"`
-	BuildKitHost string `json:"BUILDKIT_HOST"`
-	RegistryURL  string `json:"REGISTRY_URL"`
-	CallbackURL  string `json:"CALLBACK_URL"`
-	CacheBackend string `json:"BUILDKIT_CACHE_BACKEND"`
-	CacheDir     string `json:"BUILDKIT_CACHE_DIR"`
+	HubcellBaseURL      string `json:"HUBCELL_BASE_URL"`
+	HubcellCLIPath      string `json:"HUBCELL_CLI_PATH"`
+	CallbackURL         string `json:"CALLBACK_URL"`
+	ServerAddr          string `json:"SERVER_ADDR"`
+	UploadAddr          string `json:"UPLOAD_ADDR"`
+	DataDir             string `json:"DATA_DIR"`
+	LogDir              string `json:"LOG_DIR"`
+	MaxConcurrentBuilds int    `json:"MAX_CONCURRENT_BUILDS"`
+	LogRetentionDays    int    `json:"LOG_RETENTION_DAYS"`
+	UpdateLockfile      string `json:"UPDATE_LOCKFILE"`
 }
 
-func applyDefaultEnvConfig() {
-	setEnvIfEmpty("BUILDKIT_ADDR", defaultBuildKitAddr)
-	setEnvIfEmpty("BUILDKIT_HOST", defaultBuildKitHost)
-	setEnvIfEmpty("REGISTRY_URL", defaultRegistryURL)
-	setEnvIfEmpty("BUILDKIT_CACHE_BACKEND", defaultCacheBackend)
-	setEnvIfEmpty("BUILDKIT_CACHE_DIR", defaultCacheDir)
-	setEnvIfEmpty("CALLBACK_URL", defaultCallbackURL)
+func defaultEnvConfig() EnvConfig {
+	return EnvConfig{
+		HubcellBaseURL:      defaultHubcellBaseURL,
+		HubcellCLIPath:      defaultHubcellCLIPath,
+		CallbackURL:         defaultCallbackURL,
+		ServerAddr:          defaultServerAddr,
+		UploadAddr:          defaultUploadAddr,
+		DataDir:             defaultDataDir,
+		LogDir:              defaultLogDir,
+		MaxConcurrentBuilds: defaultConcurrentBuilds,
+		LogRetentionDays:    defaultLogRetentionDays,
+		UpdateLockfile:      "./hubfly-builder-update.lock",
+	}
 }
 
-func loadOptionalEnvConfig() {
-	filename := "configs/env.json"
-	if _, err := os.Stat(filename); os.IsNotExist(err) {
-		log.Printf("Optional config %s not found; using default environment values", filename)
-		return
+func defaultGlobalEnvConfig() EnvConfig {
+	config := defaultEnvConfig()
+	config.DataDir = defaultGlobalDataDir
+	config.LogDir = defaultGlobalLogDir
+	config.UpdateLockfile = defaultUpdateLockfile
+	return config
+}
+
+func loadEnvConfig() EnvConfig {
+	config := defaultEnvConfig()
+	configPath, explicitConfigPath := os.LookupEnv("HUBFLY_BUILDER_CONFIG")
+	if configPath == "" {
+		configPath = defaultGlobalConfigPath
 	}
 
+	loadedGlobal := false
+	if _, err := os.Stat(configPath); err == nil {
+		if loaded, err := readEnvConfig(configPath); err != nil {
+			log.Printf("WARN: could not load config %s: %v", configPath, err)
+		} else {
+			mergeEnvConfig(&config, loaded)
+			loadedGlobal = true
+			log.Printf("Loaded config %s", configPath)
+		}
+	} else if os.IsNotExist(err) {
+		if err := writeDefaultEnvConfig(configPath, defaultGlobalEnvConfig()); err != nil {
+			log.Printf("WARN: could not create default config %s: %v", configPath, err)
+		} else if loaded, err := readEnvConfig(configPath); err != nil {
+			log.Printf("WARN: could not load created config %s: %v", configPath, err)
+		} else {
+			mergeEnvConfig(&config, loaded)
+			loadedGlobal = true
+			log.Printf("Created default config %s", configPath)
+		}
+	} else if err != nil {
+		log.Printf("WARN: could not stat config %s: %v", configPath, err)
+	}
+
+	if !loadedGlobal && !explicitConfigPath {
+		if loaded, err := readEnvConfig(localConfigPath); err == nil {
+			mergeEnvConfig(&config, loaded)
+			log.Printf("Loaded local fallback config %s", localConfigPath)
+		} else if !os.IsNotExist(err) {
+			log.Printf("WARN: could not load local fallback config %s: %v", localConfigPath, err)
+		}
+	}
+
+	applyEnvironmentOverrides(&config)
+	return config
+}
+
+func readEnvConfig(filename string) (EnvConfig, error) {
 	data, err := os.ReadFile(filename)
 	if err != nil {
-		log.Printf("WARN: could not read %s: %v", filename, err)
-		return
+		return EnvConfig{}, err
 	}
 
 	var config EnvConfig
 	if err := json.Unmarshal(data, &config); err != nil {
-		log.Printf("WARN: could not parse %s: %v", filename, err)
-		return
+		return EnvConfig{}, err
 	}
-
-	// Only override defaults when the optional config provides a value.
-	if config.BuildKitAddr != "" {
-		os.Setenv("BUILDKIT_ADDR", config.BuildKitAddr)
-	}
-	if config.BuildKitHost != "" {
-		os.Setenv("BUILDKIT_HOST", config.BuildKitHost)
-	}
-	if config.RegistryURL != "" {
-		os.Setenv("REGISTRY_URL", config.RegistryURL)
-	}
-	if config.CacheBackend != "" {
-		os.Setenv("BUILDKIT_CACHE_BACKEND", config.CacheBackend)
-	}
-	if config.CacheDir != "" {
-		os.Setenv("BUILDKIT_CACHE_DIR", config.CacheDir)
-	}
-	if config.CallbackURL != "" {
-		os.Setenv("CALLBACK_URL", config.CallbackURL)
-	}
+	return config, nil
 }
 
-func setEnvIfEmpty(key, value string) {
-	if os.Getenv(key) == "" {
-		os.Setenv(key, value)
+func writeDefaultEnvConfig(filename string, config EnvConfig) error {
+	if err := os.MkdirAll(filepath.Dir(filename), 0o750); err != nil {
+		return err
 	}
-}
-
-func ensureBuildKitCacheDir() {
-	if strings.ToLower(strings.TrimSpace(os.Getenv("BUILDKIT_CACHE_BACKEND"))) != "local" {
-		return
-	}
-
-	cacheDir := strings.TrimSpace(os.Getenv("BUILDKIT_CACHE_DIR"))
-	if cacheDir == "" {
-		return
-	}
-
-	absCacheDir, err := filepath.Abs(cacheDir)
+	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
-		log.Printf("WARN: could not resolve BUILDKIT_CACHE_DIR %q: %v", cacheDir, err)
-		return
+		return err
 	}
-	if err := os.MkdirAll(absCacheDir, 0o755); err != nil {
-		log.Printf("WARN: could not create BUILDKIT_CACHE_DIR %q: %v", absCacheDir, err)
-		return
-	}
-	os.Setenv("BUILDKIT_CACHE_DIR", absCacheDir)
+	data = append(data, '\n')
+	return os.WriteFile(filename, data, 0o640)
 }
 
-func cleanupBuildKitCacheDir() {
-	if strings.ToLower(strings.TrimSpace(os.Getenv("BUILDKIT_CACHE_BACKEND"))) != "local" {
-		return
+func mergeEnvConfig(dst *EnvConfig, src EnvConfig) {
+	if src.HubcellBaseURL != "" {
+		dst.HubcellBaseURL = src.HubcellBaseURL
 	}
-
-	cacheDir := strings.TrimSpace(os.Getenv("BUILDKIT_CACHE_DIR"))
-	if cacheDir == "" {
-		return
+	if src.HubcellCLIPath != "" {
+		dst.HubcellCLIPath = src.HubcellCLIPath
 	}
-
-	base := filepath.Join(cacheDir, "hubfly-cache")
-	pruneSharedCache(filepath.Join(base, "shared"), time.Duration(sharedCacheRetentionDays)*24*time.Hour)
-	pruneProjectCache(base, time.Duration(projectCacheRetentionDays)*24*time.Hour)
-}
-
-func pruneSharedCache(sharedDir string, retention time.Duration) {
-	pruneChildDirs(sharedDir, retention)
-}
-
-func pruneProjectCache(baseDir string, retention time.Duration) {
-	entries, err := os.ReadDir(baseDir)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			log.Printf("WARN: could not read cache directory %q: %v", baseDir, err)
-		}
-		return
+	if src.CallbackURL != "" {
+		dst.CallbackURL = src.CallbackURL
 	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() || entry.Name() == "shared" {
-			continue
-		}
-		userDir := filepath.Join(baseDir, entry.Name())
-		pruneChildDirs(userDir, retention)
+	if src.ServerAddr != "" {
+		dst.ServerAddr = src.ServerAddr
+	}
+	if src.UploadAddr != "" {
+		dst.UploadAddr = src.UploadAddr
+	}
+	if src.DataDir != "" {
+		dst.DataDir = src.DataDir
+	}
+	if src.LogDir != "" {
+		dst.LogDir = src.LogDir
+	}
+	if src.MaxConcurrentBuilds > 0 {
+		dst.MaxConcurrentBuilds = src.MaxConcurrentBuilds
+	}
+	if src.LogRetentionDays > 0 {
+		dst.LogRetentionDays = src.LogRetentionDays
+	}
+	if src.UpdateLockfile != "" {
+		dst.UpdateLockfile = src.UpdateLockfile
 	}
 }
 
-func pruneChildDirs(root string, retention time.Duration) {
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			log.Printf("WARN: could not read cache directory %q: %v", root, err)
-		}
-		return
+func applyEnvironmentOverrides(config *EnvConfig) {
+	if value := os.Getenv("HUBCELL_BASE_URL"); value != "" {
+		config.HubcellBaseURL = value
 	}
+	if value := os.Getenv("HUBCELL_CLI_PATH"); value != "" {
+		config.HubcellCLIPath = value
+	}
+	if value := os.Getenv("CALLBACK_URL"); value != "" {
+		config.CallbackURL = value
+	}
+	if value := os.Getenv("SERVER_ADDR"); value != "" {
+		config.ServerAddr = value
+	}
+	if value := os.Getenv("UPLOAD_ADDR"); value != "" {
+		config.UploadAddr = value
+	}
+	if value := os.Getenv("DATA_DIR"); value != "" {
+		config.DataDir = value
+	}
+	if value := os.Getenv("LOG_DIR"); value != "" {
+		config.LogDir = value
+	}
+	if value := os.Getenv("MAX_CONCURRENT_BUILDS"); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
+			config.MaxConcurrentBuilds = parsed
+		} else {
+			log.Printf("WARN: ignoring invalid MAX_CONCURRENT_BUILDS=%q", value)
+		}
+	}
+	if value := os.Getenv("LOG_RETENTION_DAYS"); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
+			config.LogRetentionDays = parsed
+		} else {
+			log.Printf("WARN: ignoring invalid LOG_RETENTION_DAYS=%q", value)
+		}
+	}
+	if value := os.Getenv("UPDATE_LOCKFILE"); value != "" {
+		config.UpdateLockfile = value
+	}
+}
 
-	cutoff := time.Now().Add(-retention)
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		fullPath := filepath.Join(root, entry.Name())
-		info, err := entry.Info()
-		if err != nil {
-			log.Printf("WARN: could not stat cache directory %q: %v", fullPath, err)
-			continue
-		}
-		if info.ModTime().Before(cutoff) {
-			if err := os.RemoveAll(fullPath); err != nil {
-				log.Printf("WARN: could not remove cache directory %q: %v", fullPath, err)
-			}
-		}
-	}
+func applyEnvConfig(config EnvConfig) {
+	os.Setenv("HUBCELL_BASE_URL", config.HubcellBaseURL)
+	os.Setenv("HUBCELL_CLI_PATH", config.HubcellCLIPath)
+	os.Setenv("CALLBACK_URL", config.CallbackURL)
 }
 
 func main() {
@@ -208,20 +238,17 @@ func main() {
 		}
 	}
 
-	applyDefaultEnvConfig()
-	loadOptionalEnvConfig()
-	ensureBuildKitCacheDir()
-	cleanupBuildKitCacheDir()
+	config := loadEnvConfig()
+	applyEnvConfig(config)
 
-	registry := os.Getenv("REGISTRY_URL")
-	callbackURL := os.Getenv("CALLBACK_URL") // e.g., "http://localhost:3000/api/builds/callback"
+	callbackURL := config.CallbackURL // e.g., "http://localhost:3000/api/builds/callback"
 	allowedCommands := allowlist.DefaultAllowedCommands()
 
-	if err := os.MkdirAll("data", 0o755); err != nil {
+	if err := os.MkdirAll(config.DataDir, 0o755); err != nil {
 		log.Fatalf("could not create data directory: %s\n", err)
 	}
 
-	storage, err := storage.NewStorage("./data/hubfly-builder.sqlite")
+	storage, err := storage.NewStorage(filepath.Join(config.DataDir, "hubfly-builder.sqlite"))
 	if err != nil {
 		log.Fatalf("could not create storage: %s\n", err)
 	}
@@ -230,7 +257,7 @@ func main() {
 		log.Fatalf("could not reset in-progress jobs: %s\n", err)
 	}
 
-	logManager, err := logs.NewLogManager("./log")
+	logManager, err := logs.NewLogManager(config.LogDir)
 	if err != nil {
 		log.Fatalf("could not create log manager: %s\n", err)
 	}
@@ -244,16 +271,19 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.LUTC)
 	log.Printf("System log file: %s", systemLogPath)
 	log.Printf(
-		"Env: BUILDKIT_ADDR=%q BUILDKIT_HOST=%q REGISTRY_URL=%q CALLBACK_URL=%q",
-		os.Getenv("BUILDKIT_ADDR"),
-		os.Getenv("BUILDKIT_HOST"),
-		os.Getenv("REGISTRY_URL"),
-		os.Getenv("CALLBACK_URL"),
+		"Config: HUBCELL_BASE_URL=%q HUBCELL_CLI_PATH=%q CALLBACK_URL=%q SERVER_ADDR=%q UPLOAD_ADDR=%q DATA_DIR=%q LOG_DIR=%q MAX_CONCURRENT_BUILDS=%d LOG_RETENTION_DAYS=%d",
+		config.HubcellBaseURL,
+		config.HubcellCLIPath,
+		config.CallbackURL,
+		config.ServerAddr,
+		config.UploadAddr,
+		config.DataDir,
+		config.LogDir,
+		config.MaxConcurrentBuilds,
+		config.LogRetentionDays,
+		config.UpdateLockfile,
 	)
-	log.Printf("Effective: REGISTRY_URL=%q CALLBACK_URL=%q", registry, callbackURL)
-	if err := driver.CleanupOrphanedEphemeralBuildKits(); err != nil {
-		log.Printf("WARN: could not cleanup stale ephemeral BuildKit containers: %v", err)
-	}
+	log.Printf("Effective: CALLBACK_URL=%q", callbackURL)
 
 	// Start log cleanup routine
 	go func() {
@@ -261,29 +291,28 @@ func main() {
 		defer ticker.Stop()
 		for {
 			<-ticker.C
-			if err := logManager.Cleanup(logRetentionDays * 24 * time.Hour); err != nil {
+			if err := logManager.Cleanup(time.Duration(config.LogRetentionDays) * 24 * time.Hour); err != nil {
 				log.Printf("ERROR: log cleanup failed: %v", err)
 			}
 		}
 	}()
 
 	apiClient := api.NewClient(callbackURL)
-
-	manager := executor.NewManager(storage, logManager, allowedCommands, apiClient, registry, maxConcurrentBuilds)
+	manager := executor.NewManager(storage, logManager, allowedCommands, apiClient, config.MaxConcurrentBuilds, config.UpdateLockfile)
 	go manager.Start()
 
-	uploadServer := uploadserver.NewServer(callbackURL, registry)
+	uploadServer := uploadserver.NewServer(callbackURL)
 	go func() {
-		log.Printf("Image upload server listening on %s", defaultUploadAddr)
-		if err := uploadServer.Start(defaultUploadAddr); err != nil {
+		log.Printf("Image upload server listening on %s", config.UploadAddr)
+		if err := uploadServer.Start(config.UploadAddr); err != nil {
 			log.Fatalf("could not start image upload server: %s\n", err)
 		}
 	}()
 
 	server := server.NewServer(storage, logManager, manager, allowedCommands)
 
-	log.Printf("Server listening on %s", defaultServerAddr)
-	if err := server.Start(defaultServerAddr); err != nil {
+	log.Printf("Server listening on %s", config.ServerAddr)
+	if err := server.Start(config.ServerAddr); err != nil {
 		log.Fatalf("could not start server: %s\n", err)
 	}
 }

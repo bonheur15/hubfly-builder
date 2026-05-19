@@ -1,0 +1,1 @@
+hubfly-builder ALL=(root) NOPASSWD: /usr/local/bin/hubcell

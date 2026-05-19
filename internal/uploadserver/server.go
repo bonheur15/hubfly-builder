@@ -19,7 +19,6 @@ import (
 
 type Server struct {
 	callbackURL string
-	registry    string
 	httpClient  *http.Client
 }
 
@@ -56,10 +55,9 @@ type uploadSessionResponse struct {
 	UploadedChunks []int  `json:"uploadedChunks"`
 }
 
-func NewServer(callbackURL, registry string) *Server {
+func NewServer(callbackURL string) *Server {
 	return &Server{
 		callbackURL: strings.TrimSpace(callbackURL),
-		registry:    strings.TrimSpace(registry),
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -274,15 +272,11 @@ func (s *Server) handleCompleteUploadSession(w http.ResponseWriter, r *http.Requ
 	}
 
 	defer func() {
-		_, _ = runCommand("docker", "image", "rm", "-f", imageTag)
-		_, _ = runCommand("docker", "image", "rm", "-f", manifest.SourceImage)
+		if manifest.SourceImage != imageTag {
+			_, _ = runCommand("docker", "image", "rm", "-f", manifest.SourceImage)
+		}
 		_ = os.RemoveAll(s.uploadSessionDir(buildID))
 	}()
-
-	if output, err := runCommand("docker", "push", imageTag); err != nil {
-		s.failUpload(w, buildID, uploadToken, startedAt, fmt.Errorf("docker push failed: %s", sanitizeOutput(output, err)))
-		return
-	}
 
 	finishedAt := time.Now().UTC()
 	if err := s.reportCallback(callbackPayload{
@@ -351,14 +345,10 @@ func (s *Server) handleImageUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	defer func() {
-		_, _ = runCommand("docker", "image", "rm", "-f", imageTag)
-		_, _ = runCommand("docker", "image", "rm", "-f", sourceImage)
+		if sourceImage != imageTag {
+			_, _ = runCommand("docker", "image", "rm", "-f", sourceImage)
+		}
 	}()
-
-	if output, err := runCommand("docker", "push", imageTag); err != nil {
-		s.failUpload(w, buildID, uploadToken, startedAt, fmt.Errorf("docker push failed: %s", sanitizeOutput(output, err)))
-		return
-	}
 
 	finishedAt := time.Now().UTC()
 	if err := s.reportCallback(callbackPayload{
@@ -656,8 +646,7 @@ func (s *Server) generateImageTag(buildID string) string {
 	if buildID == "" {
 		buildID = "upload"
 	}
-	repository := fmt.Sprintf("%s/hubfly-cli-upload", s.registry)
-	return fmt.Sprintf("%s:%s-%s", repository, buildID, ts)
+	return fmt.Sprintf("hubcell.local/hubfly-cli-upload:%s-%s", buildID, ts)
 }
 
 func writeRequestBodyToTemp(body io.ReadCloser, buildID string) (string, func(), error) {

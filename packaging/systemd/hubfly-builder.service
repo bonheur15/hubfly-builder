@@ -1,0 +1,19 @@
+[Unit]
+Description=Hubfly Builder
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hubfly-builder
+Group=hubfly-builder
+WorkingDirectory=/var/lib/hubfly-builder
+Environment=HUBFLY_BUILDER_CONFIG=/etc/hubfly-builder/config.json
+ExecStartPre=+/usr/bin/install -d -o hubfly-builder -g hubfly-builder -m 0750 /etc/hubfly-builder
+ExecStartPre=+/usr/bin/install -d -o hubfly-builder -g hubfly-builder -m 0750 /var/lib/hubfly-builder /var/log/hubfly-builder
+ExecStart=/usr/local/bin/hubfly-builder
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
