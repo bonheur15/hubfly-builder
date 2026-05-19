@@ -2,16 +2,12 @@ package executor
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
-	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,11 +30,12 @@ var ErrBuildFailed = errors.New("build failed")
 
 const (
 	defaultBuildTimeout         = 15 * time.Minute
-	bandwidthAPIBaseURL         = "http://localhost:10006"
 	defaultHubcellCPUPeriod     = int64(100000)
 	defaultHubcellRootfsInitial = "10g"
 	defaultHubcellCPU           = 2.0
 	defaultHubcellMemoryMB      = 4096
+	buildNetworkRateBPS         = int64(800000000)
+	defaultNetworkRateBPS       = int64(15000000)
 )
 
 type Worker struct {
@@ -104,7 +101,8 @@ func (w *Worker) Run() error {
 		w.log("ERROR: no user network provided")
 		return w.failJob("no user network provided")
 	}
-	w.applyNetworkBandwidth(requestedNetwork, 800, 800)
+	w.applyNetworkLimits(requestedNetwork, buildNetworkRateBPS, buildNetworkRateBPS)
+	defer w.applyNetworkLimits(requestedNetwork, defaultNetworkRateBPS, defaultNetworkRateBPS)
 
 	cloneCmd := w.execCommand("git", "clone", w.job.SourceInfo.GitRepository, w.workDir)
 	if err := w.executeCommand(cloneCmd); err != nil {
@@ -330,7 +328,6 @@ func (w *Worker) Run() error {
 			return w.failForStep(err, "failed to build image with hubcell")
 		}
 		w.log("Hubcell build successful.")
-		w.applyNetworkBandwidth(requestedNetwork, 15, 15)
 		w.job.ImageTag = imageTag
 		if err := w.storage.UpdateJobImageTag(w.job.ID, imageTag); err != nil {
 			w.log("ERROR: could not update image tag: %v", err)
@@ -427,7 +424,6 @@ func (w *Worker) Run() error {
 			return w.failForStep(err, "failed to build image with hubcell")
 		}
 		w.log("Hubcell build successful.")
-		w.applyNetworkBandwidth(requestedNetwork, 15, 15)
 		w.job.ImageTag = imageTag
 		if err := w.storage.UpdateJobImageTag(w.job.ID, imageTag); err != nil {
 			w.log("ERROR: could not update image tag: %v", err)
@@ -500,6 +496,14 @@ func (w *Worker) execCommand(name string, args ...string) *exec.Cmd {
 }
 
 func (w *Worker) executeCommand(cmd *exec.Cmd) error {
+	return w.executeCommandWithLogging(cmd, true)
+}
+
+func (w *Worker) executeCommandWithoutLogging(cmd *exec.Cmd) error {
+	return w.executeCommandWithLogging(cmd, false)
+}
+
+func (w *Worker) executeCommandWithLogging(cmd *exec.Cmd, logCommand bool) error {
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
@@ -523,7 +527,9 @@ func (w *Worker) executeCommand(cmd *exec.Cmd) error {
 		w.streamPipe(stderr)
 	}()
 
-	w.log("Executing: %s", sanitizeCommandForLog(cmd))
+	if logCommand {
+		w.log("Executing: %s", sanitizeCommandForLog(cmd))
+	}
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -560,7 +566,7 @@ func (w *Worker) buildImageWithHubcell(opts driver.HubcellBuildOpts) error {
 		opts.CPUPeriod,
 		opts.CPUQuota,
 	)
-	return w.executeCommand(driver.HubcellBuildCommandContext(w.ctx, opts))
+	return w.executeCommandWithoutLogging(driver.HubcellBuildCommandContext(w.ctx, opts))
 }
 
 func applyDefaultHubcellRootfs(opts *driver.HubcellBuildOpts) {
@@ -621,48 +627,26 @@ func resolvedBuildEnvEntries(result envplan.Result) []string {
 	return entries
 }
 
-func (w *Worker) applyNetworkBandwidth(networkName string, egressMbps, ingressMbps int) {
+func (w *Worker) applyNetworkLimits(networkName string, egressRateBPS, ingressRateBPS int64) {
 	networkName = strings.TrimSpace(networkName)
 	if networkName == "" {
 		return
 	}
 
-	payload := struct {
-		EgressMbps  int `json:"egress_mbps"`
-		IngressMbps int `json:"ingress_mbps"`
-	}{
-		EgressMbps:  egressMbps,
-		IngressMbps: ingressMbps,
-	}
-
-	body, err := json.Marshal(payload)
-	if err != nil {
-		w.log("WARNING: failed to encode bandwidth payload for network %s: %v", networkName, err)
+	cmd := w.execCommand(
+		"sudo",
+		driver.ResolveHubcellCLIPath(hubcellCLIPathFromEnv()),
+		"network",
+		"limits",
+		"--egress-rate-bps", fmt.Sprintf("%d", egressRateBPS),
+		"--ingress-rate-bps", fmt.Sprintf("%d", ingressRateBPS),
+		networkName,
+	)
+	if err := w.executeCommandWithoutLogging(cmd); err != nil {
+		w.log("WARNING: failed to apply network limits for %s: %v", networkName, err)
 		return
 	}
-
-	endpoint := fmt.Sprintf("%s/v1/networks/%s/bandwidth", strings.TrimRight(bandwidthAPIBaseURL, "/"), url.PathEscape(networkName))
-	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		w.log("WARNING: failed to create bandwidth request for network %s: %v", networkName, err)
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		w.log("WARNING: bandwidth update request failed for network %s: %v", networkName, err)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		w.log("WARNING: bandwidth update request for network %s returned status %d", networkName, resp.StatusCode)
-		return
-	}
-
-	w.log("Applied network bandwidth for %s: egress=%d ingress=%d", networkName, egressMbps, ingressMbps)
+	w.log("Applied network limits for %s: egressRateBPS=%d ingressRateBPS=%d", networkName, egressRateBPS, ingressRateBPS)
 }
 
 func (w *Worker) streamPipe(pipe io.Reader) {
