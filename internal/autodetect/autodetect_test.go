@@ -117,6 +117,8 @@ func nodeAllowedCommands() *allowlist.AllowedCommands {
 			"npm install",
 			"yarn install",
 			"pnpm install",
+			"pnpm install --dangerously-allow-all-builds",
+			"pnpm install --frozen-lockfile --dangerously-allow-all-builds",
 		},
 		Build: []string{
 			"npm run build",
@@ -460,7 +462,7 @@ func TestAutoDetectBuildConfigNodePnpmServeNoBuild(t *testing.T) {
 		t.Fatalf("AutoDetectBuildConfig returned error: %v", err)
 	}
 
-	if cfg.PrebuildCommand != "pnpm install" {
+	if cfg.PrebuildCommand != "pnpm install --dangerously-allow-all-builds" {
 		t.Fatalf("expected pnpm install prebuild command, got %q", cfg.PrebuildCommand)
 	}
 	if cfg.BuildCommand != "" {
@@ -880,7 +882,7 @@ func TestAutoDetectBuildConfigWorkspaceUsesRootBuildContext(t *testing.T) {
 	if cfg.AppDir != "apps/web" {
 		t.Fatalf("expected app dir apps/web, got %q", cfg.AppDir)
 	}
-	if cfg.PrebuildCommand != "pnpm install --frozen-lockfile" {
+	if cfg.PrebuildCommand != "pnpm install --frozen-lockfile --dangerously-allow-all-builds" {
 		t.Fatalf("expected frozen pnpm install, got %q", cfg.PrebuildCommand)
 	}
 	if cfg.BuildCommand != "cd 'apps/web' && pnpm run build" {

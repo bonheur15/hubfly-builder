@@ -437,6 +437,8 @@ func isTrustedGeneratedCommand(command string) bool {
 	switch command {
 	case "corepack enable",
 		"pnpm install --frozen-lockfile",
+		"pnpm install --frozen-lockfile --dangerously-allow-all-builds",
+		"pnpm install --dangerously-allow-all-builds",
 		"yarn install --frozen-lockfile",
 		"yarn install --immutable",
 		"bun install --frozen-lockfile",

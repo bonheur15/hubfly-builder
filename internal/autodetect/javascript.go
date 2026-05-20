@@ -552,7 +552,10 @@ func detectJavaScriptInstallCommand(ctx jsProjectContext) string {
 	case "bun":
 		return "bun install"
 	case "pnpm":
-		return "pnpm install"
+		if fileExists(filepath.Join(ctx.BuildContextPath, "pnpm-lock.yaml")) || fileExists(filepath.Join(ctx.AppPath, "pnpm-lock.yaml")) {
+			return "pnpm install --frozen-lockfile --dangerously-allow-all-builds"
+		}
+		return "pnpm install --dangerously-allow-all-builds"
 	case "yarn":
 		return "yarn install"
 	default:

@@ -627,10 +627,10 @@ func detectASGIFrameworkRunCommand(repoPath string) (string, string) {
 
 func detectASGIFrameworkFromSource(source string) (string, string) {
 	cases := []struct {
-		framework    string
-		needles      []string
-		constructor  string
-		defaultApp   string
+		framework   string
+		needles     []string
+		constructor string
+		defaultApp  string
 	}{
 		{framework: "fastapi", needles: []string{"fastapi("}, constructor: "FastAPI(", defaultApp: "app"},
 		{framework: "starlette", needles: []string{"starlette("}, constructor: "Starlette(", defaultApp: "app"},
@@ -811,17 +811,17 @@ func findPythonModuleFiles(repoPath, filename string) []string {
 
 	results := make([]string, 0)
 	skipDirs := map[string]struct{}{
-		".git":       {},
-		".hg":        {},
-		".svn":       {},
-		".tox":       {},
-		".venv":      {},
-		"__pycache__": {},
-		"build":      {},
-		"dist":       {},
-		"env":        {},
+		".git":         {},
+		".hg":          {},
+		".svn":         {},
+		".tox":         {},
+		".venv":        {},
+		"__pycache__":  {},
+		"build":        {},
+		"dist":         {},
+		"env":          {},
 		"node_modules": {},
-		"venv":       {},
+		"venv":         {},
 	}
 
 	_ = filepath.WalkDir(repoPath, func(path string, entry fs.DirEntry, err error) error {
@@ -1092,7 +1092,7 @@ func detectNodePackageManager(repoPath string, metadata *nodePackageJSON) string
 func nodePrebuildCandidates(repoPath, packageManager string) []string {
 	switch packageManager {
 	case "pnpm":
-		return []string{"pnpm install"}
+		return []string{"pnpm install --dangerously-allow-all-builds"}
 	case "yarn":
 		return []string{"yarn install"}
 	default:
